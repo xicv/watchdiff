@@ -1,9 +1,10 @@
 # WatchDiff 🔭
 
-A high-performance file watcher with beautiful TUI showing real-time diffs, written in Rust.
+A professional-grade file watcher with beautiful TUI, multiple diff algorithms, and comprehensive patch export capabilities, written in Rust.
 
 ## Features
 
+### Core Capabilities
 - 🚀 **High Performance**: Built with Rust for maximum speed and efficiency
 - 🎨 **Beautiful TUI**: Rich terminal interface with scrollable diff log and file list  
 - 🌈 **Syntax Highlighting**: Full syntax highlighting for 25+ programming languages in diffs
@@ -11,6 +12,13 @@ A high-performance file watcher with beautiful TUI showing real-time diffs, writ
 - 🔍 **Real-time Diffs**: Shows beautiful diffs for text file changes as they happen
 - ⌨️ **Easy CLI**: Multiple output formats and intuitive keyboard shortcuts
 - 🧵 **Async**: Non-blocking file watching with threaded architecture
+
+### Advanced Features
+- 🔧 **Multiple Diff Algorithms**: Choose from Myers, Patience, or LCS algorithms
+- 📤 **Patch Export**: Export changes as unified diffs, Git patches, or multifile bundles
+- 📊 **Rich Statistics**: Comprehensive diff statistics with addition/deletion ratios
+- 🏗️ **Modular Architecture**: Clean separation of concerns with trait-based design
+- 🎯 **Professional Tools**: Enterprise-grade patch management and export functionality
 
 ## Installation
 
@@ -48,6 +56,21 @@ watchdiff-tui --extensions rs,py,js
 
 # JSON output for scripting
 watchdiff-tui --output json
+```
+
+### Advanced Usage
+
+```bash
+# Use different diff algorithms
+watchdiff-tui --algorithm myers     # Fast, general purpose (default)
+watchdiff-tui --algorithm patience  # Better for refactored code
+watchdiff-tui --algorithm lcs       # Minimal diffs
+
+# Export patches while watching
+watchdiff-tui --export-dir ./patches /path/to/project
+
+# Combine algorithm and export
+watchdiff-tui --algorithm patience --export-dir ./patches
 ```
 
 ## User Interface
@@ -230,7 +253,28 @@ Options:
       --context <N>          Number of diff context lines [default: 3]
       --output <FORMAT>      Output format [tui|json|text|compact]
       --poll-interval <MS>   Polling interval in ms [default: 1000]
+      --algorithm <ALG>      Diff algorithm [myers|patience|lcs] [default: myers]
+      --export-dir <DIR>     Export patches to directory (TUI mode only)
 ```
+
+### Diff Algorithms
+
+WatchDiff supports multiple diff algorithms, each optimized for different scenarios:
+
+| Algorithm | Best For | Characteristics |
+|-----------|----------|----------------|
+| **Myers** | General purpose | Fast, widely used, good balance |
+| **Patience** | Code refactoring | Better handling of moved code blocks |
+| **LCS** | Minimal changes | Produces smallest possible diffs |
+
+### Export Functionality
+
+When using `--export-dir`, WatchDiff automatically saves patches in multiple formats:
+
+- **Unified diffs** (`.patch` files) - Standard diff format
+- **Git patches** (`.git.patch` files) - Git-compatible format  
+- **Multifile patches** - Combined patches for multiple files
+- **Patch bundles** - Organized directory structure with manifest
 
 ## Examples
 
@@ -250,19 +294,85 @@ watchdiff-tui --output json > changes.log
 ```bash
 # Compact format for build scripts  
 watchdiff-tui --output compact --no-color
+
+# Export patches for review process
+watchdiff-tui --algorithm patience --export-dir ./review-patches
 ```
+
+## Programmatic Usage
+
+WatchDiff can also be used as a Rust library with a powerful API:
+
+```rust
+use watchdiff_tui::{
+    diff::{DiffGenerator, DiffAlgorithmType, DiffFormatter},
+    export::DiffExporter,
+};
+
+// Generate diffs with different algorithms
+let generator = DiffGenerator::new(DiffAlgorithmType::Patience);
+let result = generator.generate(old_content, new_content);
+
+// Format as unified diff
+let formatted = DiffFormatter::format_unified(&result, "old.rs", "new.rs");
+
+// Export to file
+let exporter = DiffExporter::unified();
+exporter.export_diff(&result, old_path, new_path, "changes.patch")?;
+
+// Get statistics
+println!("Changes: {} additions, {} deletions", 
+    result.stats.lines_added, 
+    result.stats.lines_removed
+);
+```
+
+### Library Features
+
+- **Trait-based architecture** for extensible diff algorithms
+- **Multiple export formats** (unified, Git patch, side-by-side)
+- **Rich diff statistics** and metadata
+- **Professional patch management** capabilities
+- **Comprehensive test coverage**
+
+See `examples/advanced_usage.rs` for complete usage examples.
 
 ## Architecture
 
-WatchDiff is built with modern Rust practices:
+WatchDiff is built with modern Rust practices and clean architecture:
 
+### Module Organization
+```
+src/
+├── core/           # Core file watching and event handling
+│   ├── events.rs   # Event definitions and processing
+│   ├── filter.rs   # File filtering with .gitignore support
+│   └── watcher.rs  # File system monitoring
+├── diff/           # Modular diff generation system
+│   ├── algorithms.rs  # Trait-based algorithm implementations
+│   ├── generator.rs   # High-level diff generation
+│   └── formatter.rs   # Multiple output formats
+├── export/         # Professional patch export capabilities
+├── ui/             # Terminal user interface
+└── highlight.rs    # Syntax highlighting integration
+```
+
+### Key Dependencies
 - **File Watching**: `notify` crate for cross-platform filesystem events
 - **TUI**: `ratatui` with `crossterm` for beautiful terminal interfaces
 - **Syntax Highlighting**: `syntect` crate for 25+ programming languages
-- **CLI**: `clap` for robust argument parsing
-- **Diffing**: `similar` crate for advanced diff algorithms
-- **Filtering**: `ignore` crate for `.gitignore` support
+- **CLI**: `clap` for robust argument parsing with derive macros
+- **Diffing**: `similar` crate with multiple algorithm implementations
+- **Filtering**: `ignore` crate for comprehensive `.gitignore` support
 - **Async**: `tokio` for non-blocking operations
+- **Date/Time**: `chrono` for export timestamps and metadata
+
+### Design Principles
+- **Trait-based Design**: Extensible algorithms via traits
+- **Separation of Concerns**: Clear module boundaries
+- **Type Safety**: Comprehensive type system usage
+- **Performance**: Zero-cost abstractions and efficient algorithms
+- **Testability**: Each module independently testable with comprehensive coverage
 
 ## Performance
 
