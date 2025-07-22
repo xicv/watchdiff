@@ -17,6 +17,49 @@ use ratatui::{
     Frame, Terminal,
 };
 use crate::core::{AppEvent, AppState, FileEventKind, FileWatcher, HighlightedFileEvent};
+use std::time::Instant;
+
+/// Vim mode for enhanced navigation
+#[derive(Debug, Clone, PartialEq)]
+pub enum VimMode {
+    Normal,
+    Disabled,
+}
+
+/// Stores vim key sequence state for multi-key commands
+#[derive(Debug, Clone, Default)]
+pub struct VimKeySequence {
+    pub keys: String,
+    pub last_key_time: Option<Instant>,
+}
+
+impl VimKeySequence {
+    pub fn push_key(&mut self, key: char) {
+        // Reset if too much time has passed (1 second timeout)
+        if let Some(last_time) = self.last_key_time {
+            if last_time.elapsed().as_secs() > 1 {
+                self.keys.clear();
+            }
+        }
+        
+        self.keys.push(key);
+        self.last_key_time = Some(Instant::now());
+        
+        // Limit sequence length to prevent memory issues
+        if self.keys.len() > 10 {
+            self.keys.clear();
+        }
+    }
+    
+    pub fn clear(&mut self) {
+        self.keys.clear();
+        self.last_key_time = None;
+    }
+    
+    pub fn matches(&self, sequence: &str) -> bool {
+        self.keys == sequence
+    }
+}
 
 /// Strip ANSI escape codes from a string
 fn strip_ansi_codes(input: &str) -> String {
@@ -47,6 +90,8 @@ pub struct TuiApp {
     pub should_quit: bool,
     pub diff_scroll: usize,
     pub file_list_scroll: usize,
+    pub vim_mode: VimMode,
+    pub vim_key_sequence: VimKeySequence,
 }
 
 impl TuiApp {
@@ -65,6 +110,8 @@ impl TuiApp {
             should_quit: false,
             diff_scroll: 0,
             file_list_scroll: 0,
+            vim_mode: VimMode::Disabled, // Start with vim mode disabled
+            vim_key_sequence: VimKeySequence::default(),
         }
     }
 
@@ -88,8 +135,21 @@ impl TuiApp {
             if event::poll(Duration::from_millis(50))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
+                        // Handle vim mode toggle and key sequences
+                        if self.handle_vim_keys(&key) {
+                            continue; // Key was handled by vim mode
+                        }
+                        
                         match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                // Toggle vim mode with Esc if not already quitting
+                                if self.vim_mode == VimMode::Disabled {
+                                    self.vim_mode = VimMode::Normal;
+                                    self.vim_key_sequence.clear();
+                                } else {
+                                    self.should_quit = true;
+                                }
+                            },
                             KeyCode::Char('h') | KeyCode::F(1) => self.state.toggle_help(),
                             KeyCode::Up | KeyCode::Char('k') => {
                                 if self.diff_scroll > 0 {
@@ -372,16 +432,38 @@ impl TuiApp {
     }
 
     fn render_status(&self, f: &mut Frame, area: Rect) {
+        // Create vim mode indicator
+        let vim_indicator = match self.vim_mode {
+            VimMode::Normal => {
+                let mut spans = vec![
+                    Span::styled(" VIM ", Style::default().fg(Color::Black).bg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                ];
+                // Show key sequence if any
+                if !self.vim_key_sequence.keys.is_empty() {
+                    spans.push(Span::styled(
+                        format!(" {} ", self.vim_key_sequence.keys),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    ));
+                }
+                spans
+            }
+            VimMode::Disabled => vec![
+                Span::styled(" ESC ", Style::default().fg(Color::White).bg(Color::Gray).add_modifier(Modifier::BOLD)),
+                Span::styled(" for vim mode", Style::default().fg(Color::Rgb(150, 150, 150))),
+            ],
+        };
+        
+        let mut first_line = vec![
+            Span::styled("⌨️  Press ", Style::default().fg(Color::Rgb(150, 150, 150))),
+            Span::styled(" q ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(" to quit, ", Style::default().fg(Color::Rgb(150, 150, 150))),
+            Span::styled(" h ", Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(" for help | ", Style::default().fg(Color::Rgb(150, 150, 150))),
+        ];
+        first_line.extend(vim_indicator);
+        
         let status_text = vec![
-            Line::from(vec![
-                Span::styled("⌨️  Press ", Style::default().fg(Color::Rgb(150, 150, 150))),
-                Span::styled(" q ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)),
-                Span::styled(" to quit, ", Style::default().fg(Color::Rgb(150, 150, 150))),
-                Span::styled(" h ", Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(" for help, ", Style::default().fg(Color::Rgb(150, 150, 150))),
-                Span::styled(" ↑↓ ", Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD)),
-                Span::styled(" to scroll diff", Style::default().fg(Color::Rgb(150, 150, 150))),
-            ]),
+            Line::from(first_line),
             Line::from(vec![
                 Span::styled("📊 Events: ", Style::default().fg(Color::Rgb(150, 150, 150))),
                 Span::styled(
@@ -393,6 +475,11 @@ impl TuiApp {
                     self.state.watched_files.len().to_string(),
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
                 ),
+                // Show navigation hints based on vim mode
+                match self.vim_mode {
+                    VimMode::Normal => Span::styled(" | hjkl:move gg:top G:bottom", Style::default().fg(Color::Rgb(120, 120, 120))),
+                    VimMode::Disabled => Span::styled(" | ↑↓←→:move", Style::default().fg(Color::Rgb(120, 120, 120))),
+                },
             ]),
         ];
 
@@ -454,6 +541,44 @@ impl TuiApp {
                 Span::styled("- Scroll file list", Style::default())
             ]),
             Line::from(""),
+            Line::from(vec![
+                Span::styled("Vim Mode", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" (Press Esc to toggle):", Style::default())
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  h, j, k, l  ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Move left, down, up, right", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  gg         ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Go to top", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  G          ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Go to bottom", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  w, b       ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Jump forward/backward (5 lines)", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  0, $       ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Go to start/end of line", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+d/u   ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Half page down/up", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+f/b   ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Full page down/up", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  i          ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Exit vim mode", Style::default())
+            ]),
+            Line::from(""),
             Line::from("Features:"),
             Line::from(""),
             Line::from("• Real-time file change monitoring"),
@@ -495,6 +620,189 @@ impl TuiApp {
                 Constraint::Percentage((100 - percent_x) / 2),
             ])
             .split(popup_layout[1])[1]
+    }
+    
+    /// Handle vim mode key sequences and navigation
+    fn handle_vim_keys(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        if self.vim_mode == VimMode::Disabled {
+            return false;
+        }
+        
+        use crossterm::event::{KeyCode, KeyModifiers};
+        
+        match key.code {
+            // Handle Ctrl+key combinations first (before the general char pattern)
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.vim_half_page_down();
+                return true;
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.vim_half_page_up();
+                return true;
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.vim_page_down();
+                return true;
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.vim_page_up();
+                return true;
+            }
+            KeyCode::Char(c) => {
+                // Handle regular character keys
+                match c {
+                    // Disable vim mode
+                    'i' => {
+                        self.vim_mode = VimMode::Disabled;
+                        self.vim_key_sequence.clear();
+                        return true;
+                    }
+                    // Basic vim movements
+                    'h' => {
+                        self.vim_move_left();
+                        return true;
+                    }
+                    'j' => {
+                        self.vim_move_down();
+                        return true;
+                    }
+                    'k' => {
+                        self.vim_move_up();
+                        return true;
+                    }
+                    'l' => {
+                        self.vim_move_right();
+                        return true;
+                    }
+                    // Word movements (adapted for diff context)
+                    'w' => {
+                        self.vim_word_forward();
+                        return true;
+                    }
+                    'b' => {
+                        self.vim_word_backward();
+                        return true;
+                    }
+                    // Line movements
+                    '0' => {
+                        self.vim_line_start();
+                        return true;
+                    }
+                    '$' => {
+                        self.vim_line_end();
+                        return true;
+                    }
+                    // Handle multi-character sequences
+                    'g' | 'G' => {
+                        self.vim_key_sequence.push_key(c);
+                        self.handle_vim_sequence();
+                        return true;
+                    }
+                    _ => {
+                        // Clear sequence for unrecognized keys
+                        self.vim_key_sequence.clear();
+                        return false;
+                    }
+                }
+            }
+            _ => {
+                // Clear sequence for unrecognized keys
+                self.vim_key_sequence.clear();
+                return false;
+            }
+        }
+    }
+    
+    /// Handle vim multi-character sequences like 'gg' and 'G'
+    fn handle_vim_sequence(&mut self) {
+        if self.vim_key_sequence.matches("gg") {
+            self.vim_goto_top();
+            self.vim_key_sequence.clear();
+        } else if self.vim_key_sequence.matches("G") {
+            self.vim_goto_bottom();
+            self.vim_key_sequence.clear();
+        }
+        // Clear if we have an incomplete sequence that's too old
+        else if let Some(last_time) = self.vim_key_sequence.last_key_time {
+            if last_time.elapsed().as_millis() > 500 {
+                self.vim_key_sequence.clear();
+            }
+        }
+    }
+    
+    /// Vim movement implementations
+    fn vim_move_up(&mut self) {
+        if self.diff_scroll > 0 {
+            self.diff_scroll -= 1;
+        }
+    }
+    
+    fn vim_move_down(&mut self) {
+        let max_scroll = self.state.events.len().saturating_sub(1);
+        if self.diff_scroll < max_scroll {
+            self.diff_scroll += 1;
+        }
+    }
+    
+    fn vim_move_left(&mut self) {
+        if self.file_list_scroll > 0 {
+            self.file_list_scroll -= 1;
+        }
+    }
+    
+    fn vim_move_right(&mut self) {
+        let max_scroll = self.state.watched_files.len().saturating_sub(1);
+        if self.file_list_scroll < max_scroll {
+            self.file_list_scroll += 1;
+        }
+    }
+    
+    fn vim_word_forward(&mut self) {
+        // Move down by 5 lines (word-like movement in diff context)
+        let max_scroll = self.state.events.len().saturating_sub(1);
+        self.diff_scroll = (self.diff_scroll + 5).min(max_scroll);
+    }
+    
+    fn vim_word_backward(&mut self) {
+        // Move up by 5 lines (word-like movement in diff context)
+        self.diff_scroll = self.diff_scroll.saturating_sub(5);
+    }
+    
+    fn vim_line_start(&mut self) {
+        // In diff view context, move to leftmost position
+        self.file_list_scroll = 0;
+    }
+    
+    fn vim_line_end(&mut self) {
+        // In diff view context, move to rightmost position
+        let max_scroll = self.state.watched_files.len().saturating_sub(1);
+        self.file_list_scroll = max_scroll;
+    }
+    
+    fn vim_goto_top(&mut self) {
+        self.diff_scroll = 0;
+    }
+    
+    fn vim_goto_bottom(&mut self) {
+        self.diff_scroll = self.state.events.len().saturating_sub(1);
+    }
+    
+    fn vim_half_page_down(&mut self) {
+        let max_scroll = self.state.events.len().saturating_sub(1);
+        self.diff_scroll = (self.diff_scroll + 10).min(max_scroll);
+    }
+    
+    fn vim_half_page_up(&mut self) {
+        self.diff_scroll = self.diff_scroll.saturating_sub(10);
+    }
+    
+    fn vim_page_down(&mut self) {
+        let max_scroll = self.state.events.len().saturating_sub(1);
+        self.diff_scroll = (self.diff_scroll + 20).min(max_scroll);
+    }
+    
+    fn vim_page_up(&mut self) {
+        self.diff_scroll = self.diff_scroll.saturating_sub(20);
     }
 }
 
