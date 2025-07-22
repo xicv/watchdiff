@@ -75,13 +75,17 @@ impl TuiApp {
                                 }
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
-                                self.diff_scroll += 1;
+                                let max_scroll = self.state.events.len().saturating_sub(1);
+                                if self.diff_scroll < max_scroll {
+                                    self.diff_scroll += 1;
+                                }
                             }
                             KeyCode::PageUp => {
                                 self.diff_scroll = self.diff_scroll.saturating_sub(10);
                             }
                             KeyCode::PageDown => {
-                                self.diff_scroll += 10;
+                                let max_scroll = self.state.events.len().saturating_sub(1);
+                                self.diff_scroll = (self.diff_scroll + 10).min(max_scroll);
                             }
                             KeyCode::Home => {
                                 self.diff_scroll = 0;
@@ -95,7 +99,10 @@ impl TuiApp {
                                 }
                             }
                             KeyCode::Right => {
-                                self.file_list_scroll += 1;
+                                let max_scroll = self.state.watched_files.len().saturating_sub(1);
+                                if self.file_list_scroll < max_scroll {
+                                    self.file_list_scroll += 1;
+                                }
                             }
                             _ => {}
                         }
@@ -143,12 +150,21 @@ impl TuiApp {
                 Span::styled("Watching for file changes...", Style::default().fg(Color::Gray))
             ]));
         } else {
-            let start_idx = self.diff_scroll;
+            // Ensure scroll position is within bounds
+            let max_scroll = events.len().saturating_sub(1);
+            if self.diff_scroll > max_scroll {
+                self.diff_scroll = max_scroll;
+            }
+            
+            let start_idx = self.diff_scroll.min(events.len());
             let end_idx = (start_idx + visible_height).min(events.len());
             
-            for event in &events[start_idx..end_idx] {
-                lines.extend(self.format_highlighted_file_event(event));
-                lines.push(Line::from(""));
+            // Only slice if we have a valid range
+            if start_idx < events.len() && start_idx <= end_idx {
+                for event in &events[start_idx..end_idx] {
+                    lines.extend(self.format_highlighted_file_event(event));
+                    lines.push(Line::from(""));
+                }
             }
         }
 
@@ -156,8 +172,9 @@ impl TuiApp {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Changes (↑↓ to scroll, PgUp/PgDn, Home/End) ")
-                    .title_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(Color::Rgb(80, 80, 80)))
+                    .title(" 📊 Changes (↑↓ to scroll, PgUp/PgDn, Home/End) ")
+                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             )
             .wrap(Wrap { trim: true })
             .scroll((0, 0));
@@ -169,8 +186,9 @@ impl TuiApp {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("↑"))
                 .end_symbol(Some("↓"));
+            let safe_position = self.diff_scroll.min(events.len().saturating_sub(1));
             let mut scrollbar_state = ScrollbarState::new(events.len())
-                .position(self.diff_scroll);
+                .position(safe_position);
             f.render_stateful_widget(
                 scrollbar,
                 area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 }),
@@ -193,57 +211,95 @@ impl TuiApp {
             timestamp % 60
         );
 
-        let (event_type, color) = match &event.kind {
-            FileEventKind::Created => ("CREATED", Color::Green),
-            FileEventKind::Modified => ("MODIFIED", Color::Yellow),
-            FileEventKind::Deleted => ("DELETED", Color::Red),
-            FileEventKind::Moved { .. } => ("MOVED", Color::Blue),
+        let (event_symbol, event_type, color, bg_color) = match &event.kind {
+            FileEventKind::Created => ("●", "CREATED", Color::Green, Color::Rgb(0, 40, 0)),
+            FileEventKind::Modified => ("●", "MODIFIED", Color::Yellow, Color::Rgb(40, 40, 0)),
+            FileEventKind::Deleted => ("●", "DELETED", Color::Red, Color::Rgb(40, 0, 0)),
+            FileEventKind::Moved { .. } => ("●", "MOVED", Color::Blue, Color::Rgb(0, 0, 40)),
         };
 
+        // Modern header with better visual separation
         lines.push(Line::from(vec![
-            Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::Gray)),
-            Span::styled(format!("{} ", event_type), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-            Span::styled(event.path.display().to_string(), Style::default().fg(Color::White)),
+            Span::styled(format!("┌─[{}] ", time_str), Style::default().fg(Color::Rgb(100, 100, 100))),
+            Span::styled(format!(" {} {} ", event_symbol, event_type), 
+                Style::default().fg(color).bg(bg_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {} ", event.path.display()), 
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         ]));
+        
+        // Add a subtle separator line
+        lines.push(Line::from(Span::styled("├─", Style::default().fg(Color::Rgb(60, 60, 60)))));
 
         // Use syntax-highlighted diff if available, otherwise fallback to basic coloring
         if let Some(ref highlighted_diff) = event.highlighted_diff {
-            // Parse ANSI escape codes and render as styled text
-            for line in highlighted_diff.lines().take(20) {
-                lines.push(Line::from(Span::raw(line)));
+            // Parse ANSI escape codes and render as styled text with improved formatting
+            for (i, line) in highlighted_diff.lines().take(20).enumerate() {
+                let prefix = if i == 0 { "│ " } else { "│ " };
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(Color::Rgb(60, 60, 60))),
+                    Span::raw(line)
+                ]));
             }
         } else if let Some(diff) = &event.diff {
-            // Fallback to basic diff coloring
-            for line in diff.lines().take(20) {
-                if line.starts_with('+') {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
+            // Improved diff coloring with better visual hierarchy
+            for (i, line) in diff.lines().take(20).enumerate() {
+                let prefix = if i == 0 { "│ " } else { "│ " };
+                let styled_line = if line.starts_with('+') {
+                    vec![
+                        Span::styled(prefix, Style::default().fg(Color::Rgb(60, 60, 60))),
+                        Span::styled("+", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::styled(&line[1..], Style::default().fg(Color::Rgb(150, 255, 150)).bg(Color::Rgb(0, 25, 0))),
+                    ]
                 } else if line.starts_with('-') {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
+                    vec![
+                        Span::styled(prefix, Style::default().fg(Color::Rgb(60, 60, 60))),
+                        Span::styled("-", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                        Span::styled(&line[1..], Style::default().fg(Color::Rgb(255, 150, 150)).bg(Color::Rgb(25, 0, 0))),
+                    ]
                 } else if line.starts_with("@@") {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Cyan))));
+                    vec![
+                        Span::styled(prefix, Style::default().fg(Color::Rgb(60, 60, 60))),
+                        Span::styled(line, Style::default().fg(Color::Cyan).bg(Color::Rgb(0, 20, 30)).add_modifier(Modifier::BOLD)),
+                    ]
                 } else {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::White))));
-                }
+                    vec![
+                        Span::styled(prefix, Style::default().fg(Color::Rgb(60, 60, 60))),
+                        Span::styled(line, Style::default().fg(Color::Rgb(200, 200, 200))),
+                    ]
+                };
+                lines.push(Line::from(styled_line));
             }
         }
 
         // Use syntax-highlighted preview if available, otherwise fallback to basic preview
         if let Some(ref highlighted_preview) = event.highlighted_preview {
-            lines.push(Line::from(Span::styled("Preview:", Style::default().fg(Color::Cyan))));
+            lines.push(Line::from(vec![
+                Span::styled("├─ ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                Span::styled("Preview", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ]));
             for line in highlighted_preview.lines().take(5) {
-                lines.push(Line::from(Span::raw(format!("  {}", line))));
+                lines.push(Line::from(vec![
+                    Span::styled("│   ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                    Span::raw(line)
+                ]));
             }
         } else if let Some(preview) = &event.content_preview {
-            // Fallback to basic preview
-            lines.push(Line::from(Span::styled("Preview:", Style::default().fg(Color::Cyan))));
+            // Improved preview with better formatting
+            lines.push(Line::from(vec![
+                Span::styled("├─ ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                Span::styled("Preview", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ]));
             for line in preview.lines().take(5) {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", line), 
-                    Style::default().fg(Color::Gray)
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled("│   ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                    Span::styled(line, Style::default().fg(Color::Rgb(180, 180, 180)))
+                ]));
             }
         }
 
+        // Add a closing separator
+        lines.push(Line::from(Span::styled("└─", Style::default().fg(Color::Rgb(60, 60, 60)))));
+        
         lines
     }
 
@@ -253,16 +309,27 @@ impl TuiApp {
             .enumerate()
             .map(|(i, path)| {
                 let style = if i % 2 == 0 {
-                    Style::default()
+                    Style::default().fg(Color::Rgb(220, 220, 220))
                 } else {
-                    Style::default().bg(Color::DarkGray)
+                    Style::default().fg(Color::Rgb(180, 180, 180)).bg(Color::Rgb(20, 20, 25))
                 };
                 
+                let filename = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| path.display().to_string());
+                let parent = path.parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                
                 ListItem::new(Line::from(vec![
-                    Span::styled(
-                        path.display().to_string(),
-                        style.fg(Color::White)
-                    )
+                    Span::styled("📄 ", Style::default().fg(Color::Cyan)),
+                    Span::styled(filename, style.add_modifier(Modifier::BOLD)),
+                    if !parent.is_empty() {
+                        Span::styled(format!(" ({})", parent), Style::default().fg(Color::Rgb(120, 120, 120)))
+                    } else {
+                        Span::raw("")
+                    }
                 ]))
             })
             .collect();
@@ -271,10 +338,11 @@ impl TuiApp {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!(" Watched Files ({}) (←→ to scroll) ", self.state.watched_files.len()))
-                    .title_style(Style::default().fg(Color::Yellow))
+                    .border_style(Style::default().fg(Color::Rgb(80, 80, 80)))
+                    .title(format!(" 📁 Watched Files ({}) (←→ to scroll) ", self.state.watched_files.len()))
+                    .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
             )
-            .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+            .highlight_style(Style::default().bg(Color::Rgb(0, 50, 100)).add_modifier(Modifier::BOLD));
 
         f.render_stateful_widget(list, area, &mut self.list_state);
     }
@@ -282,21 +350,21 @@ impl TuiApp {
     fn render_status(&self, f: &mut Frame, area: Rect) {
         let status_text = vec![
             Line::from(vec![
-                Span::styled("Press ", Style::default()),
-                Span::styled("q", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                Span::styled(" to quit, ", Style::default()),
-                Span::styled("h", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(" for help, ", Style::default()),
-                Span::styled("↑↓", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-                Span::styled(" to scroll diff", Style::default()),
+                Span::styled("⌨️  Press ", Style::default().fg(Color::Rgb(150, 150, 150))),
+                Span::styled(" q ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(" to quit, ", Style::default().fg(Color::Rgb(150, 150, 150))),
+                Span::styled(" h ", Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(" for help, ", Style::default().fg(Color::Rgb(150, 150, 150))),
+                Span::styled(" ↑↓ ", Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled(" to scroll diff", Style::default().fg(Color::Rgb(150, 150, 150))),
             ]),
             Line::from(vec![
-                Span::styled("Events: ", Style::default()),
+                Span::styled("📊 Events: ", Style::default().fg(Color::Rgb(150, 150, 150))),
                 Span::styled(
                     self.state.events.len().to_string(),
                     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
                 ),
-                Span::styled(" | Files watched: ", Style::default()),
+                Span::styled(" | 📁 Files watched: ", Style::default().fg(Color::Rgb(150, 150, 150))),
                 Span::styled(
                     self.state.watched_files.len().to_string(),
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
@@ -305,7 +373,11 @@ impl TuiApp {
         ];
 
         let status = Paragraph::new(status_text)
-            .block(Block::default().borders(Borders::ALL).title(" Status "))
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Rgb(80, 80, 80)))
+                .title(" ℹ️  Status ")
+                .title_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)))
             .alignment(Alignment::Center);
 
         f.render_widget(status, area);

@@ -33,15 +33,27 @@ impl FileWatcher {
         // Spawn background thread to process notify events
         thread::spawn(move || {
             let mut previous_contents = std::collections::HashMap::<PathBuf, String>::new();
+            let mut last_event_time = std::collections::HashMap::<PathBuf, std::time::Instant>::new();
 
             while let Ok(result) = rx.recv() {
                 match result {
                     Ok(event) => {
+                        // Debounce rapid events on the same path
+                        let now = std::time::Instant::now();
+                        
                         for path in event.paths {
                             // Filter out ignored files
                             if !filter_clone.should_watch(&path) {
                                 continue;
                             }
+                            
+                            // Debounce: ignore events that happen too quickly after the previous one
+                            if let Some(last_time) = last_event_time.get(&path) {
+                                if now.duration_since(*last_time) < Duration::from_millis(100) {
+                                    continue;  // Skip this event as it's too soon
+                                }
+                            }
+                            last_event_time.insert(path.clone(), now);
 
                             let file_event = match event.kind {
                                 notify::EventKind::Create(_) => {
@@ -68,8 +80,20 @@ impl FileWatcher {
                                     if filter_clone.is_text_file(&path) {
                                         if let Ok(new_content) = std::fs::read_to_string(&path) {
                                             if let Some(old_content) = previous_contents.get(&path) {
+                                                // Skip if content hasn't actually changed
+                                                if *old_content == new_content {
+                                                    continue;
+                                                }
                                                 let diff = crate::generate_diff(old_content, &new_content, &path);
                                                 fe = fe.with_diff(diff);
+                                            } else {
+                                                // First time seeing this file - show a preview instead of empty diff
+                                                let preview = if new_content.len() > 200 {
+                                                    format!("{}...", &new_content[..200])
+                                                } else {
+                                                    new_content.clone()
+                                                };
+                                                fe = fe.with_preview(preview);
                                             }
                                             previous_contents.insert(path.clone(), new_content);
                                         }

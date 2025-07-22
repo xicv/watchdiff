@@ -15,9 +15,36 @@ impl FileFilter {
     pub fn should_watch<P: AsRef<Path>>(&self, path: P) -> bool {
         let path = path.as_ref();
         
-        // Always ignore .git directory itself
-        if path.components().any(|comp| comp.as_os_str() == ".git") {
+        // Convert to string for easier pattern matching
+        let path_str = path.to_string_lossy();
+        
+        // More aggressive filtering - check for various .git patterns
+        if path_str.contains("/.git/") || 
+           path_str.contains("\\.git\\") || // Windows path separator
+           path.file_name().and_then(|f| f.to_str()) == Some(".git") ||
+           path.components().any(|comp| comp.as_os_str() == ".git") {
             return false;
+        }
+        
+        // Ignore common build/temporary directories and files
+        if path_str.contains("/.DS_Store") ||
+           path_str.contains("/node_modules/") ||
+           path_str.contains("/.vscode/") ||
+           path_str.contains("/.idea/") ||
+           path_str.contains("/target/debug/") ||
+           path_str.contains("/target/release/") ||
+           path_str.contains("/.nyc_output/") ||
+           path_str.contains("/coverage/") {
+            return false;
+        }
+        
+        // Skip hidden files that start with . (except .gitignore, .env, etc.)
+        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+            if filename.starts_with('.') && 
+               !matches!(filename, ".gitignore" | ".env" | ".dockerignore" | ".editorconfig" | 
+                                  ".eslintrc.json" | ".prettierrc" | ".babelrc") {
+                return false;
+            }
         }
 
         // Use ignore crate's gitignore matching
@@ -63,7 +90,10 @@ impl FileFilter {
                 Ok(entry) => {
                     let path = entry.path();
                     if path.is_file() {
-                        files.push(path.to_path_buf());
+                        // Apply the same filtering logic as should_watch()
+                        if self.should_watch(path) {
+                            files.push(path.to_path_buf());
+                        }
                     }
                 }
                 Err(err) => {
