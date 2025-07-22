@@ -18,6 +18,28 @@ use ratatui::{
 };
 use crate::{AppEvent, AppState, FileEventKind, FileWatcher, HighlightedFileEvent};
 
+/// Strip ANSI escape codes from a string
+fn strip_ansi_codes(input: &str) -> String {
+    let mut result = String::new();
+    let mut chars = input.chars().peekable();
+    
+    while let Some(ch) = chars.next() {
+        if ch == '\x1b' && chars.peek() == Some(&'[') {
+            // Skip the escape sequence
+            chars.next(); // consume '['
+            while let Some(ch) = chars.next() {
+                if ch.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    
+    result
+}
+
 pub struct TuiApp {
     pub state: AppState,
     pub watcher: FileWatcher,
@@ -220,7 +242,7 @@ impl TuiApp {
 
         // Modern header with better visual separation
         lines.push(Line::from(vec![
-            Span::styled(format!("┌─[{}] ", time_str), Style::default().fg(Color::Rgb(100, 100, 100))),
+            Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::Rgb(100, 100, 100))),
             Span::styled(format!(" {} {} ", event_symbol, event_type), 
                 Style::default().fg(color).bg(bg_color).add_modifier(Modifier::BOLD)),
             Span::styled(format!(" {} ", event.path.display()), 
@@ -228,33 +250,34 @@ impl TuiApp {
         ]));
         
         // Add a subtle separator line
-        lines.push(Line::from(Span::styled("├─", Style::default().fg(Color::Rgb(60, 60, 60)))));
+        lines.push(Line::from(Span::styled("|--", Style::default().fg(Color::Rgb(60, 60, 60)))));
 
         // Use syntax-highlighted diff if available, otherwise fallback to basic coloring
         if let Some(ref highlighted_diff) = event.highlighted_diff {
-            // Parse ANSI escape codes and render as styled text with improved formatting
-            for (i, line) in highlighted_diff.lines().take(20).enumerate() {
-                let prefix = if i == 0 { "│ " } else { "│ " };
+            // Strip ANSI escape codes and render with basic styling
+            for line in highlighted_diff.lines().take(20) {
+                let prefix = "| ";
+                let clean_line = strip_ansi_codes(line);
                 lines.push(Line::from(vec![
                     Span::styled(prefix, Style::default().fg(Color::Rgb(60, 60, 60))),
-                    Span::raw(line)
+                    Span::raw(clean_line)
                 ]));
             }
         } else if let Some(diff) = &event.diff {
             // Improved diff coloring with better visual hierarchy
-            for (i, line) in diff.lines().take(20).enumerate() {
-                let prefix = if i == 0 { "│ " } else { "│ " };
-                let styled_line = if line.starts_with('+') {
+            for line in diff.lines().take(20) {
+                let prefix = "| ";
+                let styled_line = if let Some(stripped) = line.strip_prefix('+') {
                     vec![
                         Span::styled(prefix, Style::default().fg(Color::Rgb(60, 60, 60))),
                         Span::styled("+", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                        Span::styled(&line[1..], Style::default().fg(Color::Rgb(150, 255, 150)).bg(Color::Rgb(0, 25, 0))),
+                        Span::styled(stripped, Style::default().fg(Color::Rgb(150, 255, 150)).bg(Color::Rgb(0, 25, 0))),
                     ]
-                } else if line.starts_with('-') {
+                } else if let Some(stripped) = line.strip_prefix('-') {
                     vec![
                         Span::styled(prefix, Style::default().fg(Color::Rgb(60, 60, 60))),
                         Span::styled("-", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                        Span::styled(&line[1..], Style::default().fg(Color::Rgb(255, 150, 150)).bg(Color::Rgb(25, 0, 0))),
+                        Span::styled(stripped, Style::default().fg(Color::Rgb(255, 150, 150)).bg(Color::Rgb(25, 0, 0))),
                     ]
                 } else if line.starts_with("@@") {
                     vec![
@@ -274,31 +297,32 @@ impl TuiApp {
         // Use syntax-highlighted preview if available, otherwise fallback to basic preview
         if let Some(ref highlighted_preview) = event.highlighted_preview {
             lines.push(Line::from(vec![
-                Span::styled("├─ ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                Span::styled("|-- ", Style::default().fg(Color::Rgb(60, 60, 60))),
                 Span::styled("Preview", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             ]));
             for line in highlighted_preview.lines().take(5) {
+                let clean_line = strip_ansi_codes(line);
                 lines.push(Line::from(vec![
-                    Span::styled("│   ", Style::default().fg(Color::Rgb(60, 60, 60))),
-                    Span::raw(line)
+                    Span::styled("|   ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                    Span::raw(clean_line)
                 ]));
             }
         } else if let Some(preview) = &event.content_preview {
             // Improved preview with better formatting
             lines.push(Line::from(vec![
-                Span::styled("├─ ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                Span::styled("|-- ", Style::default().fg(Color::Rgb(60, 60, 60))),
                 Span::styled("Preview", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
             ]));
             for line in preview.lines().take(5) {
                 lines.push(Line::from(vec![
-                    Span::styled("│   ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                    Span::styled("|   ", Style::default().fg(Color::Rgb(60, 60, 60))),
                     Span::styled(line, Style::default().fg(Color::Rgb(180, 180, 180)))
                 ]));
             }
         }
 
         // Add a closing separator
-        lines.push(Line::from(Span::styled("└─", Style::default().fg(Color::Rgb(60, 60, 60)))));
+        lines.push(Line::from(Span::styled("`--", Style::default().fg(Color::Rgb(60, 60, 60)))));
         
         lines
     }

@@ -188,14 +188,12 @@ fn print_text_event(event: &watchdiff_tui::FileEvent, cli: &Cli) {
         for line in diff.lines().take(10) {
             if cli.no_color {
                 println!("  {}", line);
+            } else if line.starts_with('+') {
+                println!("  \x1b[32m{}\x1b[0m", line);
+            } else if line.starts_with('-') {
+                println!("  \x1b[31m{}\x1b[0m", line);
             } else {
-                if line.starts_with('+') {
-                    println!("  \x1b[32m{}\x1b[0m", line);
-                } else if line.starts_with('-') {
-                    println!("  \x1b[31m{}\x1b[0m", line);
-                } else {
-                    println!("  {}", line);
-                }
+                println!("  {}", line);
             }
         }
     }

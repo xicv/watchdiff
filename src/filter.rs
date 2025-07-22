@@ -50,11 +50,11 @@ impl FileFilter {
         // Use ignore crate's gitignore matching
         let mut builder = ignore::gitignore::GitignoreBuilder::new(&self.root_path);
         
-        // Add .gitignore files
-        let _ = builder.add(&self.root_path.join(".gitignore"));
+        // Add .gitignore files - Fixed: Remove needless borrow
+        let _ = builder.add(self.root_path.join(".gitignore"));
         if let Some(home) = std::env::var_os("HOME") {
             let global_gitignore = std::path::PathBuf::from(home).join(".gitignore_global");
-            let _ = builder.add(&global_gitignore);
+            let _ = builder.add(global_gitignore);
         }
         
         match builder.build() {
@@ -128,5 +128,64 @@ impl FileFilter {
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_should_watch_git_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let filter = FileFilter::new(temp_dir.path()).unwrap();
+        
+        // Should not watch .git files
+        assert!(!filter.should_watch(temp_dir.path().join(".git/objects/abc123")));
+        assert!(!filter.should_watch(temp_dir.path().join(".git/config")));
+        assert!(!filter.should_watch(temp_dir.path().join("subdir/.git/HEAD")));
+    }
+
+    #[test]
+    fn test_should_watch_regular_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let filter = FileFilter::new(temp_dir.path()).unwrap();
+        
+        // Should watch regular source files
+        assert!(filter.should_watch(temp_dir.path().join("src/main.rs")));
+        assert!(filter.should_watch(temp_dir.path().join("README.md")));
+        assert!(filter.should_watch(temp_dir.path().join("package.json")));
+    }
+
+    #[test]
+    fn test_should_watch_hidden_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let filter = FileFilter::new(temp_dir.path()).unwrap();
+        
+        // Should watch important dotfiles
+        assert!(filter.should_watch(temp_dir.path().join(".gitignore")));
+        assert!(filter.should_watch(temp_dir.path().join(".env")));
+        
+        // Should not watch other hidden files
+        assert!(!filter.should_watch(temp_dir.path().join(".DS_Store")));
+        assert!(!filter.should_watch(temp_dir.path().join(".hidden_file")));
+    }
+
+    #[test]
+    fn test_is_text_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let filter = FileFilter::new(temp_dir.path()).unwrap();
+        
+        // Text files
+        assert!(filter.is_text_file("main.rs"));
+        assert!(filter.is_text_file("script.py"));
+        assert!(filter.is_text_file("README.md"));
+        assert!(filter.is_text_file("Dockerfile"));
+        
+        // Non-text files (likely)
+        assert!(!filter.is_text_file("image.png"));
+        assert!(!filter.is_text_file("binary.exe"));
+        assert!(!filter.is_text_file("unknown"));
     }
 }

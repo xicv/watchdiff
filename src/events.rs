@@ -52,9 +52,7 @@ impl FileEvent {
     }
 
     pub fn to_highlighted(&self) -> HighlightedFileEvent {
-        use crate::highlight::{SyntaxHighlighter, is_likely_text_file};
-
-        let mut highlighted_event = HighlightedFileEvent {
+        let highlighted_event = HighlightedFileEvent {
             path: self.path.clone(),
             kind: self.kind.clone(),
             timestamp: self.timestamp,
@@ -64,29 +62,9 @@ impl FileEvent {
             highlighted_preview: None,
         };
 
-        // Only apply syntax highlighting if this is a likely text file
-        if is_likely_text_file(&self.path) {
-            let highlighter = SyntaxHighlighter::new();
-            let language = highlighter.get_language_from_path(&self.path);
-
-            // Process diff with syntax highlighting
-            if let Some(ref diff_content) = self.diff {
-                if let Some(ref lang) = language {
-                    highlighted_event.highlighted_diff = Some(
-                        highlighter.get_terminal_highlighted(diff_content, lang)
-                    );
-                }
-            }
-
-            // Process content preview with syntax highlighting  
-            if let Some(ref preview_content) = self.content_preview {
-                if let Some(ref lang) = language {
-                    highlighted_event.highlighted_preview = Some(
-                        highlighter.get_terminal_highlighted(preview_content, lang)
-                    );
-                }
-            }
-        }
+        // Skip syntax highlighting to avoid ANSI escape codes in TUI
+        // The TUI will use its own built-in coloring for diff display
+        // Terminal highlighting is only useful for non-TUI output modes
 
         highlighted_event
     }
