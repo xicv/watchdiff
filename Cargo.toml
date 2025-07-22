@@ -48,5 +48,8 @@ tracing-subscriber = "0.3"
 # Signal handling
 ctrlc = "3.4"
 
+# Date/time for export functionality
+chrono = { version = "0.4", features = ["serde"] }
+
 [dev-dependencies]
 tempfile = "3.8"

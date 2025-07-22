@@ -6,9 +6,8 @@ use std::time::Duration;
 
 use watchdiff_tui::{
     cli::{Cli, OutputFormat},
-    tui::{setup_terminal, restore_terminal, TuiApp},
-    watcher::FileWatcher,
-    AppEvent,
+    ui::{setup_terminal, restore_terminal, TuiApp},
+    core::{FileWatcher, AppEvent},
 };
 
 fn main() -> Result<()> {

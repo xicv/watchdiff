@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use clap::{Parser, ValueEnum};
+use crate::diff::DiffAlgorithmType;
 
 #[derive(Parser)]
 #[command(name = "watchdiff")]
@@ -47,6 +48,14 @@ pub struct Cli {
     /// Polling interval in milliseconds (for polling mode)
     #[arg(long, default_value = "1000", help = "Polling interval in ms")]
     pub poll_interval: u64,
+    
+    /// Diff algorithm to use
+    #[arg(long, default_value = "myers", help = "Diff algorithm (myers, patience, lcs)")]
+    pub algorithm: DiffAlgorithmType,
+    
+    /// Export patches to directory (TUI mode only)
+    #[arg(long, help = "Export patches to specified directory")]
+    pub export_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -146,6 +155,8 @@ impl Default for Cli {
             context: 3,
             output: OutputFormat::Tui,
             poll_interval: 1000,
+            algorithm: DiffAlgorithmType::Myers,
+            export_dir: None,
         }
     }
 }

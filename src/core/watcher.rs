@@ -4,7 +4,8 @@ use std::thread;
 use std::time::Duration;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use anyhow::{Result, Context};
-use crate::{FileEvent, FileEventKind, AppEvent, FileFilter};
+use super::{FileEvent, FileEventKind, filter::FileFilter};
+use super::events::AppEvent;
 
 pub struct FileWatcher {
     _watcher: RecommendedWatcher,
@@ -84,7 +85,7 @@ impl FileWatcher {
                                                 if *old_content == new_content {
                                                     continue;
                                                 }
-                                                let diff = crate::generate_diff(old_content, &new_content, &path);
+                                                let diff = crate::diff::generate_unified_diff(old_content, &new_content, &path, &path);
                                                 fe = fe.with_diff(diff);
                                             } else {
                                                 // First time seeing this file - show a preview instead of empty diff

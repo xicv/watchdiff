@@ -16,7 +16,7 @@ use ratatui::{
     },
     Frame, Terminal,
 };
-use crate::{AppEvent, AppState, FileEventKind, FileWatcher, HighlightedFileEvent};
+use crate::core::{AppEvent, AppState, FileEventKind, FileWatcher, HighlightedFileEvent};
 
 /// Strip ANSI escape codes from a string
 fn strip_ansi_codes(input: &str) -> String {
