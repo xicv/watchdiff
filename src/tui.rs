@@ -16,7 +16,7 @@ use ratatui::{
     },
     Frame, Terminal,
 };
-use crate::{AppEvent, AppState, FileEvent, FileEventKind, FileWatcher};
+use crate::{AppEvent, AppState, FileEvent, FileEventKind, FileWatcher, HighlightedFileEvent};
 
 pub struct TuiApp {
     pub state: AppState,
@@ -133,7 +133,7 @@ impl TuiApp {
     }
 
     fn render_diff_log(&mut self, f: &mut Frame, area: Rect) {
-        let events = &self.state.events;
+        let events = &self.state.highlighted_events;
         
         let mut lines = Vec::new();
         let visible_height = area.height as usize - 2; // Account for borders
@@ -147,7 +147,7 @@ impl TuiApp {
             let end_idx = (start_idx + visible_height).min(events.len());
             
             for event in &events[start_idx..end_idx] {
-                lines.extend(self.format_file_event(event));
+                lines.extend(self.format_highlighted_file_event(event));
                 lines.push(Line::from(""));
             }
         }
@@ -177,6 +177,74 @@ impl TuiApp {
                 &mut scrollbar_state,
             );
         }
+    }
+
+    fn format_highlighted_file_event<'a>(&self, event: &'a HighlightedFileEvent) -> Vec<Line<'a>> {
+        let mut lines = Vec::new();
+        
+        let timestamp = event.timestamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        
+        let time_str = format!("{:02}:{:02}:{:02}", 
+            (timestamp % 86400) / 3600,
+            (timestamp % 3600) / 60,
+            timestamp % 60
+        );
+
+        let (event_type, color) = match &event.kind {
+            FileEventKind::Created => ("CREATED", Color::Green),
+            FileEventKind::Modified => ("MODIFIED", Color::Yellow),
+            FileEventKind::Deleted => ("DELETED", Color::Red),
+            FileEventKind::Moved { .. } => ("MOVED", Color::Blue),
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::Gray)),
+            Span::styled(format!("{} ", event_type), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            Span::styled(event.path.display().to_string(), Style::default().fg(Color::White)),
+        ]));
+
+        // Use syntax-highlighted diff if available, otherwise fallback to basic coloring
+        if let Some(ref highlighted_diff) = event.highlighted_diff {
+            // Parse ANSI escape codes and render as styled text
+            for line in highlighted_diff.lines().take(20) {
+                lines.push(Line::from(Span::raw(line)));
+            }
+        } else if let Some(diff) = &event.diff {
+            // Fallback to basic diff coloring
+            for line in diff.lines().take(20) {
+                if line.starts_with('+') {
+                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
+                } else if line.starts_with('-') {
+                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
+                } else if line.starts_with("@@") {
+                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Cyan))));
+                } else {
+                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::White))));
+                }
+            }
+        }
+
+        // Use syntax-highlighted preview if available, otherwise fallback to basic preview
+        if let Some(ref highlighted_preview) = event.highlighted_preview {
+            lines.push(Line::from(Span::styled("Preview:", Style::default().fg(Color::Cyan))));
+            for line in highlighted_preview.lines().take(5) {
+                lines.push(Line::from(Span::raw(format!("  {}", line))));
+            }
+        } else if let Some(preview) = &event.content_preview {
+            // Fallback to basic preview
+            lines.push(Line::from(Span::styled("Preview:", Style::default().fg(Color::Cyan))));
+            for line in preview.lines().take(5) {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", line), 
+                    Style::default().fg(Color::Gray)
+                )));
+            }
+        }
+
+        lines
     }
 
     fn render_file_list(&mut self, f: &mut Frame, area: Rect) {

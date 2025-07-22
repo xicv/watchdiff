@@ -6,6 +6,7 @@ A high-performance file watcher with beautiful TUI showing real-time diffs, writ
 
 - 🚀 **High Performance**: Built with Rust for maximum speed and efficiency
 - 🎨 **Beautiful TUI**: Rich terminal interface with scrollable diff log and file list  
+- 🌈 **Syntax Highlighting**: Full syntax highlighting for 25+ programming languages in diffs
 - 📂 **Smart Filtering**: Respects `.gitignore` patterns automatically
 - 🔍 **Real-time Diffs**: Shows beautiful diffs for text file changes as they happen
 - ⌨️ **Easy CLI**: Multiple output formats and intuitive keyboard shortcuts
@@ -102,9 +103,13 @@ WatchDiff features a modern, responsive terminal user interface built with ratat
   - 🟡 **MODIFIED** - Changed files (yellow) 
   - 🔴 **DELETED** - Removed files (red)
   - 🔵 **MOVED** - Renamed/moved files (blue)
-- Unified diff format with syntax highlighting
+- **Full syntax highlighting** for 25+ languages including:
+  - Rust, Python, JavaScript, TypeScript, Java, C/C++, Go
+  - HTML, CSS, JSON, YAML, TOML, XML, Markdown
+  - Bash, SQL, Dockerfile, and many more
+- Unified diff format with intelligent syntax preservation
 - Timestamps for each event
-- Content preview for new files
+- Syntax-highlighted content preview for new files
 - Scrollbar for long change lists
 
 **📁 Middle Panel - File List (25% height)**
@@ -253,6 +258,7 @@ WatchDiff is built with modern Rust practices:
 
 - **File Watching**: `notify` crate for cross-platform filesystem events
 - **TUI**: `ratatui` with `crossterm` for beautiful terminal interfaces
+- **Syntax Highlighting**: `syntect` crate for 25+ programming languages
 - **CLI**: `clap` for robust argument parsing
 - **Diffing**: `similar` crate for advanced diff algorithms
 - **Filtering**: `ignore` crate for `.gitignore` support

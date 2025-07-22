@@ -1,6 +1,6 @@
 [package]
 name = "watchdiff-tui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["xicv <xicv@users.noreply.github.com>"]
 description = "A high-performance file watcher with beautiful TUI showing real-time diffs"
@@ -26,6 +26,9 @@ clap = { version = "4.5", features = ["derive"] }
 
 # Diff generation
 similar = "2.6"
+
+# Syntax highlighting
+syntect = "5.2"
 
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
