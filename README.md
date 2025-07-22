@@ -16,7 +16,7 @@ A high-performance file watcher with beautiful TUI showing real-time diffs, writ
 ### From Cargo
 
 ```bash
-cargo install watchdiff
+cargo install watchdiff-tui
 ```
 
 ### Build from Source
@@ -34,19 +34,19 @@ cargo build --release
 
 ```bash
 # Watch current directory with TUI
-watchdiff
+watchdiff-tui
 
 # Watch specific directory
-watchdiff /path/to/project
+watchdiff-tui /path/to/project
 
 # Watch with text output
-watchdiff --output text
+watchdiff-tui --output text
 
 # Watch only specific file types
-watchdiff --extensions rs,py,js
+watchdiff-tui --extensions rs,py,js
 
 # JSON output for scripting
-watchdiff --output json
+watchdiff-tui --output json
 ```
 
 ## User Interface
@@ -180,7 +180,7 @@ For non-interactive use cases, WatchDiff supports several output formats:
 
 #### Text Mode (`--output text`)
 ```bash
-$ watchdiff --output text
+$ watchdiff-tui --output text
 Watching: /home/user/project
 Press Ctrl+C to quit
 ---
@@ -200,7 +200,7 @@ Press Ctrl+C to quit
 
 #### Compact Mode (`--output compact`)
 ```bash
-$ watchdiff --output compact
+$ watchdiff-tui --output compact
 M src/main.rs
 C docs/README.md  
 D old_file.txt
@@ -232,19 +232,19 @@ Options:
 ### Development Workflow
 ```bash
 # Watch Rust project files only
-watchdiff --extensions rs,toml,md
+watchdiff-tui --extensions rs,toml,md
 
 # Watch with additional ignores
-watchdiff --ignore "*.log,tmp/*"
+watchdiff-tui --ignore "*.log,tmp/*"
 
 # JSON output piped to file
-watchdiff --output json > changes.log
+watchdiff-tui --output json > changes.log
 ```
 
 ### CI/CD Integration
 ```bash
 # Compact format for build scripts  
-watchdiff --output compact --no-color
+watchdiff-tui --output compact --no-color
 ```
 
 ## Architecture
