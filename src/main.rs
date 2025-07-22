@@ -1,5 +1,8 @@
 use clap::Parser;
 use anyhow::Result;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use watchdiff_tui::{
     cli::{Cli, OutputFormat},
@@ -63,15 +66,23 @@ fn run_json_mode(cli: &Cli) -> Result<()> {
     let watch_path = cli.get_watch_path();
     let watcher = FileWatcher::new(&watch_path)?;
     
-    loop {
-        match watcher.recv() {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })?;
+    
+    while running.load(Ordering::SeqCst) {
+        match watcher.recv_timeout(Duration::from_millis(100)) {
             Ok(AppEvent::FileChanged(event)) => {
                 if should_include_file(&event.path, cli) {
                     println!("{}", serde_json::to_string(&event)?);
                 }
             }
             Ok(AppEvent::Quit) => break,
-            _ => continue,
+            Ok(_) => continue, // Ignore other events
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
     
@@ -86,15 +97,23 @@ fn run_text_mode(cli: &Cli) -> Result<()> {
     println!("Press Ctrl+C to quit");
     println!("---");
     
-    loop {
-        match watcher.recv() {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })?;
+    
+    while running.load(Ordering::SeqCst) {
+        match watcher.recv_timeout(Duration::from_millis(100)) {
             Ok(AppEvent::FileChanged(event)) => {
                 if should_include_file(&event.path, cli) {
                     print_text_event(&event, cli);
                 }
             }
             Ok(AppEvent::Quit) => break,
-            _ => continue,
+            Ok(_) => continue, // Ignore other events
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
     
@@ -105,15 +124,23 @@ fn run_compact_mode(cli: &Cli) -> Result<()> {
     let watch_path = cli.get_watch_path();
     let watcher = FileWatcher::new(&watch_path)?;
     
-    loop {
-        match watcher.recv() {
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })?;
+    
+    while running.load(Ordering::SeqCst) {
+        match watcher.recv_timeout(Duration::from_millis(100)) {
             Ok(AppEvent::FileChanged(event)) => {
                 if should_include_file(&event.path, cli) {
                     print_compact_event(&event);
                 }
             }
             Ok(AppEvent::Quit) => break,
-            _ => continue,
+            Ok(_) => continue, // Ignore other events
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
     

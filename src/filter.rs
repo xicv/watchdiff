@@ -20,27 +20,31 @@ impl FileFilter {
             return false;
         }
 
-        // Use ignore crate to check if file should be ignored
-        let walker = WalkBuilder::new(&self.root_path)
-            .hidden(false)
-            .git_ignore(true)
-            .git_global(true) 
-            .git_exclude(true)
-            .ignore(true)
-            .parents(true)
-            .build();
-
-        for result in walker {
-            match result {
-                Ok(entry) => {
-                    if entry.path() == path {
-                        return true;
-                    }
-                }
-                Err(_) => continue,
-            }
+        // Use ignore crate's gitignore matching
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(&self.root_path);
+        
+        // Add .gitignore files
+        let _ = builder.add(&self.root_path.join(".gitignore"));
+        if let Some(home) = std::env::var_os("HOME") {
+            let global_gitignore = std::path::PathBuf::from(home).join(".gitignore_global");
+            let _ = builder.add(&global_gitignore);
         }
-        false
+        
+        match builder.build() {
+            Ok(gitignore) => {
+                let relative_path = if let Ok(rel) = path.strip_prefix(&self.root_path) {
+                    rel
+                } else {
+                    path
+                };
+                
+                match gitignore.matched(relative_path, path.is_dir()) {
+                    ignore::Match::None | ignore::Match::Whitelist(_) => true,
+                    ignore::Match::Ignore(_) => false,
+                }
+            }
+            Err(_) => true, // If we can't build gitignore, watch everything
+        }
     }
 
     pub fn get_watchable_files(&self) -> Result<Vec<PathBuf>> {

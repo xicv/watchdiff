@@ -16,7 +16,7 @@ use ratatui::{
     },
     Frame, Terminal,
 };
-use crate::{AppEvent, AppState, FileEvent, FileEventKind, FileWatcher, HighlightedFileEvent};
+use crate::{AppEvent, AppState, FileEventKind, FileWatcher, HighlightedFileEvent};
 
 pub struct TuiApp {
     pub state: AppState,
@@ -380,59 +380,6 @@ impl TuiApp {
         f.render_widget(paragraph, popup_area);
     }
 
-    fn format_file_event<'a>(&self, event: &'a FileEvent) -> Vec<Line<'a>> {
-        let mut lines = Vec::new();
-        
-        let timestamp = event.timestamp
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        
-        let time_str = format!("{:02}:{:02}:{:02}", 
-            (timestamp % 86400) / 3600,
-            (timestamp % 3600) / 60,
-            timestamp % 60
-        );
-
-        let (event_type, color) = match &event.kind {
-            FileEventKind::Created => ("CREATED", Color::Green),
-            FileEventKind::Modified => ("MODIFIED", Color::Yellow),
-            FileEventKind::Deleted => ("DELETED", Color::Red),
-            FileEventKind::Moved { .. } => ("MOVED", Color::Blue),
-        };
-
-        lines.push(Line::from(vec![
-            Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::Gray)),
-            Span::styled(format!("{} ", event_type), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-            Span::styled(event.path.display().to_string(), Style::default().fg(Color::White)),
-        ]));
-
-        if let Some(diff) = &event.diff {
-            for line in diff.lines().take(20) { // Limit lines shown
-                if line.starts_with('+') {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
-                } else if line.starts_with('-') {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Red))));
-                } else if line.starts_with("@@") {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Cyan))));
-                } else {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(Color::White))));
-                }
-            }
-        }
-
-        if let Some(preview) = &event.content_preview {
-            lines.push(Line::from(Span::styled("Preview:", Style::default().fg(Color::Cyan))));
-            for line in preview.lines().take(5) {
-                lines.push(Line::from(Span::styled(
-                    format!("  {}", line), 
-                    Style::default().fg(Color::Gray)
-                )));
-            }
-        }
-
-        lines
-    }
 
     fn centered_rect(&self, percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         let popup_layout = Layout::default()
