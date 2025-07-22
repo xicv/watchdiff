@@ -1,5 +1,5 @@
 [package]
-name = "watchdiff"
+name = "watchdiff-tui"
 version = "0.1.0"
 edition = "2021"
 authors = ["xicv <xicv@users.noreply.github.com>"]
