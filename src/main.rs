@@ -1,7 +1,7 @@
 use clap::Parser;
 use anyhow::Result;
 
-use watchdiff::{
+use watchdiff_tui::{
     cli::{Cli, OutputFormat},
     tui::{setup_terminal, restore_terminal, TuiApp},
     watcher::FileWatcher,
@@ -124,8 +124,8 @@ fn should_include_file(path: &std::path::Path, cli: &Cli) -> bool {
     cli.should_watch_extension(path)
 }
 
-fn print_text_event(event: &watchdiff::FileEvent, cli: &Cli) {
-    use watchdiff::FileEventKind;
+fn print_text_event(event: &watchdiff_tui::FileEvent, cli: &Cli) {
+    use watchdiff_tui::FileEventKind;
     
     let timestamp = event.timestamp
         .duration_since(std::time::UNIX_EPOCH)
@@ -176,8 +176,8 @@ fn print_text_event(event: &watchdiff::FileEvent, cli: &Cli) {
     println!();
 }
 
-fn print_compact_event(event: &watchdiff::FileEvent) {
-    use watchdiff::FileEventKind;
+fn print_compact_event(event: &watchdiff_tui::FileEvent) {
+    use watchdiff_tui::FileEventKind;
     
     let event_type = match &event.kind {
         FileEventKind::Created => "C",
