@@ -2,10 +2,15 @@
 name = "watchdiff"
 version = "0.1.0"
 edition = "2021"
-authors = ["watchdiff"]
+authors = ["xicv <xicv@users.noreply.github.com>"]
 description = "A high-performance file watcher with beautiful TUI showing real-time diffs"
+homepage = "https://github.com/xicv/watchdiff"
+repository = "https://github.com/xicv/watchdiff"
+readme = "README.md"
 license = "MIT"
-rust-version = "1.85.0"
+keywords = ["file-watcher", "tui", "diff", "monitoring", "development"]
+categories = ["command-line-utilities", "development-tools", "filesystem"]
+rust-version = "1.70.0"
 
 [dependencies]
 # File watching and filesystem
