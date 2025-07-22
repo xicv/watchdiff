@@ -1,0 +1,32 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Build artifacts
+/release/
+/debug/
+
+# Documentation
+/docs/site/
+
+# Testing
+/coverage/
+/.nyc_output/

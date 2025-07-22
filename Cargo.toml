@@ -1,0 +1,38 @@
+[package]
+name = "watchdiff"
+version = "0.1.0"
+edition = "2021"
+authors = ["watchdiff"]
+description = "A high-performance file watcher with beautiful TUI showing real-time diffs"
+license = "MIT"
+rust-version = "1.85.0"
+
+[dependencies]
+# File watching and filesystem
+notify = "6.1"
+ignore = "0.4"
+
+# TUI and terminal
+ratatui = "0.28"
+crossterm = "0.28"
+
+# CLI parsing
+clap = { version = "4.5", features = ["derive"] }
+
+# Diff generation
+similar = "2.6"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+
+# Serialization for configuration
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
