@@ -857,25 +857,28 @@ impl TuiApp {
         let start_line = self.search_state.preview_scroll;
         let end_line = (start_line + visible_height).min(lines.len());
         
-        // Create syntax highlighter
+        // Create syntax highlighter and highlight entire content for better state management
         let highlighter = crate::highlight::SyntaxHighlighter::default();
+        let highlighted_content = highlighter.highlight_code(content, language);
         
-        let visible_lines: Vec<Line> = lines[start_line..end_line]
-            .iter()
-            .enumerate()
-            .map(|(i, line)| {
-                let line_num = start_line + i + 1;
+        let visible_lines: Vec<Line> = (start_line..end_line)
+            .map(|absolute_line_idx| {
+                let line_num = absolute_line_idx + 1;
                 let line_num_span = Span::styled(
                     format!("{:4} │ ", line_num), 
                     Style::default().fg(Color::Rgb(100, 100, 100))
                 );
                 
-                // Apply syntax highlighting to the line
-                let highlighted_spans = highlighter.highlight_line(line, language, line_num);
-                
                 let mut spans = vec![line_num_span];
-                for (style, text) in highlighted_spans {
-                    spans.push(Span::styled(text, style));
+                
+                // Get highlighted spans for this line from the pre-highlighted content
+                if let Some(line_spans) = highlighted_content.get(absolute_line_idx) {
+                    for (style, text) in line_spans {
+                        spans.push(Span::styled(text.clone(), style.clone()));
+                    }
+                } else if let Some(plain_line) = lines.get(absolute_line_idx) {
+                    // Fallback to plain text if highlighting failed
+                    spans.push(Span::raw(*plain_line));
                 }
                 
                 Line::from(spans)
