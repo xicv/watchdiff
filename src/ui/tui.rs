@@ -857,15 +857,28 @@ impl TuiApp {
         let start_line = self.search_state.preview_scroll;
         let end_line = (start_line + visible_height).min(lines.len());
         
+        // Create syntax highlighter
+        let highlighter = crate::highlight::SyntaxHighlighter::default();
+        
         let visible_lines: Vec<Line> = lines[start_line..end_line]
             .iter()
             .enumerate()
             .map(|(i, line)| {
                 let line_num = start_line + i + 1;
-                Line::from(vec![
-                    Span::styled(format!("{:4} │ ", line_num), Style::default().fg(Color::Rgb(100, 100, 100))),
-                    Span::raw(*line),
-                ])
+                let line_num_span = Span::styled(
+                    format!("{:4} │ ", line_num), 
+                    Style::default().fg(Color::Rgb(100, 100, 100))
+                );
+                
+                // Apply syntax highlighting to the line
+                let highlighted_spans = highlighter.highlight_line(line, language, line_num);
+                
+                let mut spans = vec![line_num_span];
+                for (style, text) in highlighted_spans {
+                    spans.push(Span::styled(text, style));
+                }
+                
+                Line::from(spans)
             })
             .collect();
 
@@ -874,7 +887,7 @@ impl TuiApp {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Green))
-                    .title(format!(" {} [{}] ", 
+                    .title(format!(" {} [{}] (↑↓ PgUp/PgDn ←→ to scroll) ", 
                         file_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
                         language
                     ))
@@ -1019,11 +1032,19 @@ impl TuiApp {
             ]),
             Line::from(vec![
                 Span::styled("  Enter      ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled("- Open selected file", Style::default())
+                Span::styled("- Jump to file in diff view", Style::default())
             ]),
             Line::from(vec![
                 Span::styled("  Ctrl+U/D   ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 Span::styled("- Scroll preview up/down", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  PgUp/PgDn  ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("- Page preview up/down", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  ←→         ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("- Fine scroll preview", Style::default())
             ]),
             Line::from(vec![
                 Span::styled("  Esc        ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
@@ -1111,6 +1132,26 @@ impl TuiApp {
             .split(popup_layout[1])[1]
     }
     
+    /// Jump to a specific file in the diff view and scroll to show it
+    fn jump_to_file_in_diff_view(&mut self, target_file: &PathBuf) {
+        // Find the most recent event for this file in the diff log
+        if let Some(position) = self.state.highlighted_events
+            .iter()
+            .position(|event| event.path == *target_file) 
+        {
+            // Set the diff scroll to show this file's event at the top of the view
+            self.diff_scroll = position;
+            
+            // Also clear any file list scroll to return to default view
+            self.file_list_scroll = 0;
+        } else {
+            // If file not found in recent events, it means there are no recent changes
+            // for this file. Scroll to top to show the most recent activity.
+            self.diff_scroll = 0;
+            self.file_list_scroll = 0;
+        }
+    }
+
     /// Handle search mode key input
     fn handle_search_keys(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -1133,9 +1174,9 @@ impl TuiApp {
                 true
             }
             KeyCode::Enter => {
-                // Open selected file in normal mode
-                if let Some(_selected_file) = self.search_state.get_selected_file() {
-                    // TODO: Jump to selected file in diff view or open it
+                // Jump to selected file in diff view
+                if let Some(selected_file) = self.search_state.get_selected_file().cloned() {
+                    self.jump_to_file_in_diff_view(&selected_file);
                     self.app_mode = AppMode::Normal;
                     self.search_state.clear();
                 }
@@ -1149,6 +1190,26 @@ impl TuiApp {
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Page down in preview
                 self.search_state.preview_scroll += 10;
+                true
+            }
+            KeyCode::PageUp => {
+                // Page up in preview
+                self.search_state.preview_scroll = self.search_state.preview_scroll.saturating_sub(10);
+                true
+            }
+            KeyCode::PageDown => {
+                // Page down in preview
+                self.search_state.preview_scroll += 10;
+                true
+            }
+            KeyCode::Left => {
+                // Scroll left in preview (horizontal scroll)
+                self.search_state.preview_scroll = self.search_state.preview_scroll.saturating_sub(1);
+                true
+            }
+            KeyCode::Right => {
+                // Scroll right/down in preview
+                self.search_state.preview_scroll += 1;
                 true
             }
             _ => false, // Let other keys be handled normally

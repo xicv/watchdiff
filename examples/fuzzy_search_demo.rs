@@ -26,8 +26,10 @@ fn demonstrate_search_features() {
     println!("  • /        : Enter search mode");
     println!("  • Ctrl+P   : Fuzzy file search (alternative)");
     println!("  • ↑↓, j/k  : Navigate search results");
-    println!("  • Enter    : Open selected file");
+    println!("  • Enter    : Jump to file in diff view");
     println!("  • Ctrl+U/D : Scroll preview up/down");
+    println!("  • PgUp/PgDn: Page preview up/down");
+    println!("  • ←→       : Fine scroll preview");
     println!("  • Esc      : Exit search mode");
     println!("  • Backspace: Remove characters from search");
     println!();
@@ -51,10 +53,11 @@ fn demonstrate_search_features() {
     println!();
     
     println!("📋 Preview Capabilities:");
-    println!("  • Syntax highlighting for 25+ languages");
+    println!("  • Full syntax highlighting for 25+ languages");
     println!("  • Diff highlighting for recently changed files");
     println!("  • File metadata (language detection)");
     println!("  • Scrollable content with line numbers");
+    println!("  • Multiple scroll options (Ctrl+U/D, PgUp/PgDn, ←→)");
     println!("  • Git-style diff visualization");
     println!("  • Change timestamps and event types");
     println!();
@@ -63,6 +66,8 @@ fn demonstrate_search_features() {
     println!("  • Seamless vim mode compatibility");
     println!("  • Existing file watching integration");
     println!("  • Real-time file list updates");
+    println!("  • Jump to file in diff view on selection");
+    println!("  • Automatic scroll positioning to show selected file");
     println!("  • Preserves all existing navigation");
     println!();
 }
@@ -118,7 +123,7 @@ fn demonstrate_usage_example() {
     println!("   │ + }}                                           │");
     println!("   └─────────────────────────────────────────────────┘");
     println!();
-    println!("7. Press Enter to select file or Esc to exit search");
+    println!("7. Press Enter to jump to file in diff view or Esc to exit search");
     println!();
     println!("🚀 Advanced Search Patterns:");
     println!("   • 'rs'        → Finds all .rs files");
@@ -130,9 +135,15 @@ fn demonstrate_usage_example() {
     println!("🎮 Pro Tips:");
     println!("   • Search starts instantly as you type");
     println!("   • Recent files appear at the top of results");
-    println!("   • Use Ctrl+U/D to scroll through long file previews");
+    println!("   • Multiple preview scroll options:");
+    println!("     - Ctrl+U/D: Page up/down (10 lines)");
+    println!("     - PgUp/PgDn: Page up/down (10 lines)");
+    println!("     - ←→: Fine scroll (1 line)");
+    println!("   • Full syntax highlighting in preview");
     println!("   • Search works with vim mode - use j/k for navigation");
     println!("   • File indicators show: 🟡 (modified), 📄 (unchanged)");
+    println!("   • Press Enter to jump directly to file's diff entry");
+    println!("   • Selected file appears at top of diff view automatically");
     println!();
     println!("🔧 Implementation highlights:");
     println!("   • Fuzzy matching algorithm with scoring");
