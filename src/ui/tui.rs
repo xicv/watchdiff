@@ -1,5 +1,6 @@
 use std::io;
 use std::time::Duration;
+use std::path::PathBuf;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -24,6 +25,150 @@ use std::time::Instant;
 pub enum VimMode {
     Normal,
     Disabled,
+}
+
+/// Application UI mode
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppMode {
+    Normal,
+    Search,
+    Help,
+}
+
+/// Search mode state for fuzzy file search
+#[derive(Debug, Clone, Default)]
+pub struct SearchState {
+    pub query: String,
+    pub filtered_files: Vec<PathBuf>,
+    pub selected_index: usize,
+    pub preview_scroll: usize,
+}
+
+impl SearchState {
+    pub fn update_filtered_files(&mut self, all_files: &std::collections::HashSet<PathBuf>, events: &[crate::core::HighlightedFileEvent]) {
+        if self.query.is_empty() {
+            // Show all files when no query
+            self.filtered_files = all_files.iter().cloned().collect();
+        } else {
+            // Apply fuzzy search
+            let mut scored_files: Vec<(PathBuf, i32)> = all_files
+                .iter()
+                .filter_map(|path| {
+                    let score = self.fuzzy_match(path);
+                    if score > 0 {
+                        Some((path.clone(), score))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            
+            // Sort by score (higher is better) and recent activity
+            scored_files.sort_by(|a, b| {
+                let score_cmp = b.1.cmp(&a.1);
+                if score_cmp == std::cmp::Ordering::Equal {
+                    // If scores are equal, prioritize recently changed files
+                    let a_recent = events.iter().any(|e| e.path == a.0);
+                    let b_recent = events.iter().any(|e| e.path == b.0);
+                    b_recent.cmp(&a_recent)
+                } else {
+                    score_cmp
+                }
+            });
+            
+            // Extract just the paths
+            self.filtered_files = scored_files.into_iter().map(|(path, _)| path).collect();
+        }
+        
+        // Reset selection if out of bounds
+        if self.selected_index >= self.filtered_files.len() {
+            self.selected_index = 0;
+        }
+    }
+    
+    fn fuzzy_match(&self, path: &PathBuf) -> i32 {
+        let query = self.query.to_lowercase();
+        let path_str = path.to_string_lossy().to_lowercase();
+        let filename = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        
+        // Simple fuzzy matching algorithm
+        let mut score: i32 = 0;
+        let mut query_chars = query.chars().peekable();
+        let mut consecutive_bonus = 0;
+        
+        // First check filename for exact substring match (higher score)
+        if filename.contains(&query) {
+            score += 100;
+        }
+        
+        // Then check full path
+        if path_str.contains(&query) {
+            score += 50;
+        }
+        
+        // Character-by-character fuzzy matching
+        let path_chars: Vec<char> = path_str.chars().collect();
+        let mut path_idx = 0;
+        
+        while let Some(&query_char) = query_chars.peek() {
+            if path_idx >= path_chars.len() {
+                break;
+            }
+            
+            if path_chars[path_idx] == query_char {
+                score += 10 + consecutive_bonus;
+                consecutive_bonus += 5; // Bonus for consecutive matches
+                query_chars.next();
+            } else {
+                consecutive_bonus = 0;
+            }
+            path_idx += 1;
+        }
+        
+        // Penalty for longer paths (prefer shorter, more specific matches)
+        score = score.saturating_sub(path_str.len() as i32 / 10);
+        
+        // Return 0 if we didn't match all query characters
+        if query_chars.peek().is_some() {
+            0
+        } else {
+            score.max(1)
+        }
+    }
+    
+    pub fn get_selected_file(&self) -> Option<&PathBuf> {
+        self.filtered_files.get(self.selected_index)
+    }
+    
+    pub fn move_up(&mut self) {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+        }
+    }
+    
+    pub fn move_down(&mut self) {
+        if self.selected_index + 1 < self.filtered_files.len() {
+            self.selected_index += 1;
+        }
+    }
+    
+    pub fn add_char(&mut self, c: char) {
+        self.query.push(c);
+    }
+    
+    pub fn remove_char(&mut self) {
+        self.query.pop();
+    }
+    
+    pub fn clear(&mut self) {
+        self.query.clear();
+        self.filtered_files.clear();
+        self.selected_index = 0;
+        self.preview_scroll = 0;
+    }
 }
 
 /// Stores vim key sequence state for multi-key commands
@@ -92,6 +237,8 @@ pub struct TuiApp {
     pub file_list_scroll: usize,
     pub vim_mode: VimMode,
     pub vim_key_sequence: VimKeySequence,
+    pub app_mode: AppMode,
+    pub search_state: SearchState,
 }
 
 impl TuiApp {
@@ -112,6 +259,8 @@ impl TuiApp {
             file_list_scroll: 0,
             vim_mode: VimMode::Disabled, // Start with vim mode disabled
             vim_key_sequence: VimKeySequence::default(),
+            app_mode: AppMode::Normal,
+            search_state: SearchState::default(),
         }
     }
 
@@ -135,6 +284,13 @@ impl TuiApp {
             if event::poll(Duration::from_millis(50))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
+                        // Handle search mode keys first
+                        if self.app_mode == AppMode::Search {
+                            if self.handle_search_keys(&key) {
+                                continue; // Key was handled by search mode
+                            }
+                        }
+
                         // Handle vim mode toggle and key sequences
                         if self.handle_vim_keys(&key) {
                             continue; // Key was handled by vim mode
@@ -142,15 +298,44 @@ impl TuiApp {
                         
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => {
-                                // Toggle vim mode with Esc if not already quitting
-                                if self.vim_mode == VimMode::Disabled {
-                                    self.vim_mode = VimMode::Normal;
-                                    self.vim_key_sequence.clear();
-                                } else {
-                                    self.should_quit = true;
+                                match self.app_mode {
+                                    AppMode::Search => {
+                                        // Exit search mode
+                                        self.app_mode = AppMode::Normal;
+                                        self.search_state.clear();
+                                    }
+                                    AppMode::Help => {
+                                        // Exit help mode
+                                        self.app_mode = AppMode::Normal;
+                                    }
+                                    AppMode::Normal => {
+                                        // Toggle vim mode with Esc if not already quitting
+                                        if self.vim_mode == VimMode::Disabled {
+                                            self.vim_mode = VimMode::Normal;
+                                            self.vim_key_sequence.clear();
+                                        } else {
+                                            self.should_quit = true;
+                                        }
+                                    }
                                 }
                             },
-                            KeyCode::Char('h') | KeyCode::F(1) => self.state.toggle_help(),
+                            KeyCode::Char('h') | KeyCode::F(1) => {
+                                self.app_mode = if self.app_mode == AppMode::Help {
+                                    AppMode::Normal
+                                } else {
+                                    AppMode::Help
+                                };
+                            },
+                            KeyCode::Char('/') => {
+                                // Enter search mode
+                                self.app_mode = AppMode::Search;
+                                self.search_state.clear();
+                            },
+                            KeyCode::Char('p') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                                // Enter search mode (Ctrl+P alternative)
+                                self.app_mode = AppMode::Search;
+                                self.search_state.clear();
+                            },
                             KeyCode::Up | KeyCode::Char('k') => {
                                 if self.diff_scroll > 0 {
                                     self.diff_scroll -= 1;
@@ -201,9 +386,18 @@ impl TuiApp {
     }
 
     fn ui(&mut self, f: &mut Frame) {
-        if self.state.show_help {
-            self.render_help(f);
-            return;
+        match self.app_mode {
+            AppMode::Help => {
+                self.render_help(f);
+                return;
+            }
+            AppMode::Search => {
+                self.render_search_mode(f);
+                return;
+            }
+            AppMode::Normal => {
+                // Continue with normal rendering
+            }
         }
 
         let chunks = Layout::default()
@@ -458,7 +652,9 @@ impl TuiApp {
             Span::styled(" q ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD)),
             Span::styled(" to quit, ", Style::default().fg(Color::Rgb(150, 150, 150))),
             Span::styled(" h ", Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(" for help | ", Style::default().fg(Color::Rgb(150, 150, 150))),
+            Span::styled(" for help, ", Style::default().fg(Color::Rgb(150, 150, 150))),
+            Span::styled(" / ", Style::default().fg(Color::White).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(" to search | ", Style::default().fg(Color::Rgb(150, 150, 150))),
         ];
         first_line.extend(vim_indicator);
         
@@ -492,6 +688,269 @@ impl TuiApp {
             .alignment(Alignment::Center);
 
         f.render_widget(status, area);
+    }
+
+    fn render_search_mode(&mut self, f: &mut Frame) {
+        // Ensure cursor is visible in search mode
+        // This is handled by ratatui when we call set_cursor_position
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Length(3),      // Search input
+                Constraint::Min(10),        // File list + preview
+            ])
+            .split(f.area());
+
+        // Render search input
+        self.render_search_input(f, chunks[0]);
+        
+        // Split the remaining area for file list and preview
+        let content_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(40), // File list
+                Constraint::Percentage(60), // Preview
+            ])
+            .split(chunks[1]);
+
+        self.render_search_results(f, content_chunks[0]);
+        self.render_file_preview(f, content_chunks[1]);
+    }
+
+    fn render_search_input(&self, f: &mut Frame, area: Rect) {
+        // Create input text with visual cursor indicator
+        let prefix = "🔍 ";
+        let input_text = format!("{}{}█", prefix, self.search_state.query);
+        
+        let input = Paragraph::new(input_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(" Search Files ")
+                    .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            );
+        f.render_widget(input, area);
+        
+        // Position the terminal cursor at the end (after the visual cursor)
+        // This helps with terminal cursor visibility
+        let cursor_x = area.x + 1 + prefix.chars().count() as u16 + self.search_state.query.len() as u16 + 1;
+        let cursor_y = area.y + 1;
+        
+        // Ensure cursor is within bounds
+        if cursor_x < area.x + area.width - 1 {
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
+
+    fn render_search_results(&mut self, f: &mut Frame, area: Rect) {
+        // Update filtered files based on current query
+        self.search_state.update_filtered_files(&self.state.watched_files, &self.state.highlighted_events);
+        
+        let items: Vec<ListItem> = self.search_state.filtered_files
+            .iter()
+            .enumerate()
+            .map(|(i, path)| {
+                let style = if i == self.search_state.selected_index {
+                    Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                
+                let filename = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let parent = path.parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+
+                // Check if file has recent changes
+                let has_changes = self.state.highlighted_events.iter().any(|e| e.path == *path);
+                let change_indicator = if has_changes { "🟡 " } else { "📄 " };
+                
+                ListItem::new(Line::from(vec![
+                    Span::styled(change_indicator, Style::default().fg(Color::Cyan)),
+                    Span::styled(filename, style.add_modifier(Modifier::BOLD)),
+                    if !parent.is_empty() {
+                        Span::styled(format!(" ({})", parent), Style::default().fg(Color::Rgb(120, 120, 120)))
+                    } else {
+                        Span::raw("")
+                    }
+                ]))
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(format!(" Files ({}/{}) ", 
+                        self.search_state.filtered_files.len(),
+                        self.state.watched_files.len()
+                    ))
+                    .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            );
+
+        f.render_widget(list, area);
+    }
+
+    fn render_file_preview(&mut self, f: &mut Frame, area: Rect) {
+        let selected_file = self.search_state.get_selected_file();
+        
+        if let Some(file_path) = selected_file {
+            // Try to read file content
+            match std::fs::read_to_string(file_path) {
+                Ok(content) => {
+                    let language = crate::highlight::SyntaxHighlighter::default()
+                        .get_language_from_path(file_path)
+                        .unwrap_or_else(|| "Plain Text".to_string());
+                    
+                    // Check if file has recent changes for diff preview
+                    let recent_event = self.state.highlighted_events
+                        .iter()
+                        .find(|e| e.path == *file_path);
+                    
+                    if let Some(event) = recent_event {
+                        self.render_diff_preview(f, area, file_path, &content, event);
+                    } else {
+                        self.render_file_content_preview(f, area, file_path, &content, &language);
+                    }
+                }
+                Err(_) => {
+                    let error_text = vec![
+                        Line::from(Span::styled("Cannot read file", Style::default().fg(Color::Red))),
+                        Line::from(Span::styled(file_path.display().to_string(), Style::default().fg(Color::Gray))),
+                    ];
+                    
+                    let paragraph = Paragraph::new(error_text)
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(Color::Red))
+                                .title(" Preview ")
+                                .title_style(Style::default().fg(Color::Red))
+                        );
+                    f.render_widget(paragraph, area);
+                }
+            }
+        } else {
+            let placeholder = Paragraph::new("Select a file to preview")
+                .style(Style::default().fg(Color::Gray))
+                .alignment(Alignment::Center)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Gray))
+                        .title(" Preview ")
+                );
+            f.render_widget(placeholder, area);
+        }
+    }
+
+    fn render_file_content_preview(&self, f: &mut Frame, area: Rect, file_path: &std::path::Path, content: &str, language: &str) {
+        let visible_height = area.height as usize - 2; // Account for borders
+        let lines: Vec<&str> = content.lines().collect();
+        
+        let start_line = self.search_state.preview_scroll;
+        let end_line = (start_line + visible_height).min(lines.len());
+        
+        let visible_lines: Vec<Line> = lines[start_line..end_line]
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let line_num = start_line + i + 1;
+                Line::from(vec![
+                    Span::styled(format!("{:4} │ ", line_num), Style::default().fg(Color::Rgb(100, 100, 100))),
+                    Span::raw(*line),
+                ])
+            })
+            .collect();
+
+        let paragraph = Paragraph::new(visible_lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Green))
+                    .title(format!(" {} [{}] ", 
+                        file_path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                        language
+                    ))
+                    .title_style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            )
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, area);
+    }
+
+    fn render_diff_preview(&self, f: &mut Frame, area: Rect, file_path: &std::path::Path, _content: &str, event: &crate::core::HighlightedFileEvent) {
+        let mut lines = Vec::new();
+        
+        // Show file change information
+        let (event_symbol, event_type, color) = match &event.kind {
+            crate::core::FileEventKind::Created => ("●", "CREATED", Color::Green),
+            crate::core::FileEventKind::Modified => ("●", "MODIFIED", Color::Yellow),
+            crate::core::FileEventKind::Deleted => ("●", "DELETED", Color::Red),
+            crate::core::FileEventKind::Moved { .. } => ("●", "MOVED", Color::Blue),
+        };
+
+        let timestamp = event.timestamp
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let time_str = format!("{:02}:{:02}:{:02}", 
+            (timestamp % 86400) / 3600,
+            (timestamp % 3600) / 60,
+            timestamp % 60
+        );
+
+        lines.push(Line::from(vec![
+            Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::Rgb(100, 100, 100))),
+            Span::styled(format!("{} {} ", event_symbol, event_type), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        ]));
+        lines.push(Line::from(""));
+
+        // Show diff if available
+        if let Some(diff) = &event.diff {
+            for (i, line) in diff.lines().enumerate() {
+                if i >= (area.height as usize - 6) { // Leave space for headers
+                    break;
+                }
+                
+                let styled_line = if let Some(stripped) = line.strip_prefix('+') {
+                    Line::from(vec![
+                        Span::styled("+", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                        Span::styled(stripped, Style::default().fg(Color::Rgb(150, 255, 150))),
+                    ])
+                } else if let Some(stripped) = line.strip_prefix('-') {
+                    Line::from(vec![
+                        Span::styled("-", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                        Span::styled(stripped, Style::default().fg(Color::Rgb(255, 150, 150))),
+                    ])
+                } else if line.starts_with("@@") {
+                    Line::from(Span::styled(line, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)))
+                } else {
+                    Line::from(Span::styled(line, Style::default().fg(Color::Rgb(200, 200, 200))))
+                };
+                lines.push(styled_line);
+            }
+        }
+
+        let paragraph = Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(format!(" 🔄 {} ", 
+                        file_path.file_name().and_then(|n| n.to_str()).unwrap_or("")
+                    ))
+                    .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+            )
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, area);
     }
 
     fn render_help(&self, f: &mut Frame) {
@@ -539,6 +998,36 @@ impl TuiApp {
             Line::from(vec![
                 Span::styled("  ←, →       ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("- Scroll file list", Style::default())
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Search Mode", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" (Press / or Ctrl+P):", Style::default())
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  /          ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("- Enter search mode", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+P     ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("- Fuzzy file search (like fzf)", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  ↑/↓, j/k   ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("- Navigate search results", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  Enter      ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("- Open selected file", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl+U/D   ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("- Scroll preview up/down", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  Esc        ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("- Exit search mode", Style::default())
             ]),
             Line::from(""),
             Line::from(vec![
@@ -622,6 +1111,50 @@ impl TuiApp {
             .split(popup_layout[1])[1]
     }
     
+    /// Handle search mode key input
+    fn handle_search_keys(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        
+        match key.code {
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.search_state.add_char(c);
+                true
+            }
+            KeyCode::Backspace => {
+                self.search_state.remove_char();
+                true
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.search_state.move_up();
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.search_state.move_down();
+                true
+            }
+            KeyCode::Enter => {
+                // Open selected file in normal mode
+                if let Some(_selected_file) = self.search_state.get_selected_file() {
+                    // TODO: Jump to selected file in diff view or open it
+                    self.app_mode = AppMode::Normal;
+                    self.search_state.clear();
+                }
+                true
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Page up in preview
+                self.search_state.preview_scroll = self.search_state.preview_scroll.saturating_sub(10);
+                true
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Page down in preview
+                self.search_state.preview_scroll += 10;
+                true
+            }
+            _ => false, // Let other keys be handled normally
+        }
+    }
+
     /// Handle vim mode key sequences and navigation
     fn handle_vim_keys(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         if self.vim_mode == VimMode::Disabled {
@@ -697,6 +1230,11 @@ impl TuiApp {
                         self.vim_key_sequence.push_key(c);
                         self.handle_vim_sequence();
                         return true;
+                    }
+                    // Always let search key pass through to main handler
+                    '/' => {
+                        self.vim_key_sequence.clear();
+                        return false;
                     }
                     _ => {
                         // Clear sequence for unrecognized keys
