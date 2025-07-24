@@ -1,6 +1,6 @@
 use watchdiff_tui::{
-    diff::{DiffGenerator, DiffAlgorithmType, DiffFormatter, DiffFormat},
-    export::{DiffExporter, ExportConfig},
+    diff::{DiffGenerator, DiffAlgorithmType, DiffFormatter},
+    export::DiffExporter,
     core::{FileEvent, FileEventKind},
 };
 use std::path::Path;

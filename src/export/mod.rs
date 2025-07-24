@@ -253,7 +253,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use crate::diff::{DiffGenerator, DiffAlgorithmType};
-    use crate::events::FileEventKind;
+    use crate::core::events::FileEventKind;
     use std::time::SystemTime;
 
     #[test]
