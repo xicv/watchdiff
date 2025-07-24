@@ -5,8 +5,9 @@ A professional-grade file watcher with beautiful TUI, multiple diff algorithms, 
 ## Features
 
 ### Core Capabilities
+
 - 🚀 **High Performance**: Built with Rust for maximum speed and efficiency
-- 🎨 **Beautiful TUI**: Rich terminal interface with scrollable diff log and file list  
+- 🎨 **Beautiful TUI**: Rich terminal interface with scrollable diff log and file list
 - 🌈 **Syntax Highlighting**: Full syntax highlighting for 25+ programming languages in diffs
 - 📂 **Smart Filtering**: Respects `.gitignore` patterns automatically
 - 🔍 **Real-time Diffs**: Shows beautiful diffs for text file changes as they happen
@@ -15,6 +16,7 @@ A professional-grade file watcher with beautiful TUI, multiple diff algorithms, 
 - 🔍 **Fuzzy File Search**: fzf-style search with file preview and jump-to-diff functionality
 
 ### Advanced Features
+
 - 🔧 **Multiple Diff Algorithms**: Choose from Myers, Patience, or LCS algorithms
 - 📤 **Patch Export**: Export changes as unified diffs, Git patches, or multifile bundles
 - 📊 **Rich Statistics**: Comprehensive diff statistics with addition/deletion ratios
@@ -85,24 +87,24 @@ WatchDiff features a modern, responsive terminal user interface built with ratat
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ Changes (↑↓ to scroll, PgUp/PgDn, Home/End)                           │
+│ Changes (↑↓ to scroll, PgUp/PgDn, Home/End)                             │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ [12:34:56] MODIFIED src/main.rs                                        │
+│ [12:34:56] MODIFIED src/main.rs                                         │
 │ --- src/main.rs                                                         │
 │ +++ src/main.rs                                                         │
-│ @@ -15,7 +15,8 @@                                                      │
+│ @@ -15,7 +15,8 @@                                                       │
 │ - fn main() {                                                           │
-│ + fn main() -> Result<()> {                                            │
-│     let cli = Cli::parse();                                            │
-│ +   println!("Starting WatchDiff...");                                │
+│ + fn main() -> Result<()> {                                             │
+│     let cli = Cli::parse();                                             │
+│ +   println!("Starting WatchDiff...");                                  │
 │                                                                         │
 │ [12:34:52] CREATED docs/api.md                                          │
 │ Preview:                                                                │
 │   # API Documentation                                                   │
-│   This document describes the WatchDiff API...                         │
+│   This document describes the WatchDiff API...                          │
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ Watched Files (847) (←→ to scroll)                                     │
+│ Watched Files (847) (←→ to scroll)                                      │
 ├─────────────────────────────────────────────────────────────────────────┤
 │ src/main.rs                                                             │
 │ src/lib.rs                                                              │
@@ -114,18 +116,19 @@ WatchDiff features a modern, responsive terminal user interface built with ratat
 ├─────────────────────────────────────────────────────────────────────────┤
 │ Status                                                                  │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ Press q to quit, h for help, ↑↓ to scroll diff                        │
-│ Events: 23 | Files watched: 847                                        │
+│ Press q to quit, h for help, ↑↓ to scroll diff                          │
+│ Events: 23 | Files watched: 847                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 #### Panel Breakdown
 
 **📊 Top Panel - Changes Log (70% height)**
+
 - Real-time scrollable feed of file changes
 - Color-coded event types:
   - 🟢 **CREATED** - New files (green)
-  - 🟡 **MODIFIED** - Changed files (yellow) 
+  - 🟡 **MODIFIED** - Changed files (yellow)
   - 🔴 **DELETED** - Removed files (red)
   - 🔵 **MOVED** - Renamed/moved files (blue)
 - **Full syntax highlighting** for 25+ languages including:
@@ -138,6 +141,7 @@ WatchDiff features a modern, responsive terminal user interface built with ratat
 - Scrollbar for long change lists
 
 **📁 Middle Panel - File List (25% height)**
+
 - Live list of all watched files
 - File count indicator
 - Alternating row colors for readability
@@ -145,6 +149,7 @@ WatchDiff features a modern, responsive terminal user interface built with ratat
 - Respects .gitignore patterns
 
 **ℹ️ Bottom Panel - Status Bar (5% height)**
+
 - Real-time statistics (event count, file count)
 - Keyboard shortcuts reminder
 - Application status indicators
@@ -160,17 +165,17 @@ WatchDiff features a modern, responsive terminal user interface built with ratat
 
 #### Keyboard Shortcuts
 
-| Key | Action |
-|-----|--------|
-| `q`, `Esc` | Quit application |
-| `h`, `F1` | Toggle help screen |
-| `↑`, `k` | Scroll diff log up |
-| `↓`, `j` | Scroll diff log down |
-| `PgUp` | Scroll diff log up (fast) |
-| `PgDn` | Scroll diff log down (fast) |
-| `Home` | Go to top of diff log |
-| `End` | Go to bottom of diff log |
-| `←`, `→` | Scroll file list |
+| Key           | Action                       |
+| ------------- | ---------------------------- |
+| `q`, `Esc`    | Quit application             |
+| `h`, `F1`     | Toggle help screen           |
+| `↑`, `k`      | Scroll diff log up           |
+| `↓`, `j`      | Scroll diff log down         |
+| `PgUp`        | Scroll diff log up (fast)    |
+| `PgDn`        | Scroll diff log down (fast)  |
+| `Home`        | Go to top of diff log        |
+| `End`         | Go to bottom of diff log     |
+| `←`, `→`      | Scroll file list             |
 | `/`, `Ctrl+P` | Enter fuzzy file search mode |
 
 #### Fuzzy File Search
@@ -181,12 +186,13 @@ WatchDiff includes a powerful fuzzy file search feature similar to fzf:
 - **Real-time Search**: Search as you type with intelligent scoring
 - **File Preview**: View file contents with full syntax highlighting
 - **Jump to Diff**: Press Enter to jump to the file's diff entry
-- **Advanced Navigation**: 
+- **Advanced Navigation**:
   - `↑↓`, `j/k`: Navigate search results
   - `Ctrl+U/D`, `PgUp/PgDn`, `←→`: Scroll file preview
   - `Esc`: Exit search mode
 
 **Search Features:**
+
 - Fuzzy matching with intelligent scoring (filename > path > character-by-character)
 - Recently changed files prioritized in results
 - Syntax-highlighted file preview with line numbers
@@ -201,19 +207,19 @@ Press `h` or `F1` to open the interactive help screen:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Help                                                                    │
 ├─────────────────────────────────────────────────────────────────────────┤
-│ WatchDiff - File Watching Tool                                         │
+│ WatchDiff - File Watching Tool                                          │
 │                                                                         │
 │ Keyboard Shortcuts:                                                     │
 │                                                                         │
-│   q, Esc      - Quit the application                                   │
-│   h, F1       - Show/hide this help                                    │
-│   ↑, k        - Scroll diff log up                                     │
-│   ↓, j        - Scroll diff log down                                   │
-│   PgUp        - Scroll diff log up (fast)                              │
-│   PgDn        - Scroll diff log down (fast)                            │
-│   Home        - Go to top of diff log                                  │
-│   End         - Go to bottom of diff log                               │
-│   ←, →        - Scroll file list                                       │
+│   q, Esc      - Quit the application                                    │
+│   h, F1       - Show/hide this help                                     │
+│   ↑, k        - Scroll diff log up                                      │
+│   ↓, j        - Scroll diff log down                                    │
+│   PgUp        - Scroll diff log up (fast)                               │
+│   PgDn        - Scroll diff log down (fast)                             │
+│   Home        - Go to top of diff log                                   │
+│   End         - Go to bottom of diff log                                │
+│   ←, →        - Scroll file list                                        │
 │                                                                         │
 │ Features:                                                               │
 │                                                                         │
@@ -230,6 +236,7 @@ Press `h` or `F1` to open the interactive help screen:
 For non-interactive use cases, WatchDiff supports several output formats:
 
 #### Text Mode (`--output text`)
+
 ```bash
 $ watchdiff-tui --output text
 Watching: /home/user/project
@@ -244,22 +251,31 @@ Press Ctrl+C to quit
 [12:34:52] CREATED docs/README.md
 ```
 
-#### JSON Mode (`--output json`)  
+#### JSON Mode (`--output json`)
+
 ```json
-{"path":"src/main.rs","kind":"Modified","timestamp":{"secs_since_epoch":1703932496,"nanos_since_epoch":0},"diff":"--- src/main.rs\n+++ src/main.rs\n@@ -1,3 +1,4 @@\n-fn main() {\n+fn main() -> Result<()> {\n     let cli = Cli::parse();\n+    println!(\"Starting WatchDiff...\");","content_preview":null}
+{
+  "path": "src/main.rs",
+  "kind": "Modified",
+  "timestamp": { "secs_since_epoch": 1703932496, "nanos_since_epoch": 0 },
+  "diff": "--- src/main.rs\n+++ src/main.rs\n@@ -1,3 +1,4 @@\n-fn main() {\n+fn main() -> Result<()> {\n     let cli = Cli::parse();\n+    println!(\"Starting WatchDiff...\");",
+  "content_preview": null
+}
 ```
 
 #### Compact Mode (`--output compact`)
+
 ```bash
 $ watchdiff-tui --output compact
 M src/main.rs
-C docs/README.md  
+C docs/README.md
 D old_file.txt
 ```
 
 **Format Legend:**
+
 - `C` = Created
-- `M` = Modified  
+- `M` = Modified
 - `D` = Deleted
 - `V` = Moved
 
@@ -268,7 +284,7 @@ D old_file.txt
 ```
 Options:
   -m, --mode <MODE>           File watching mode [auto|native|polling]
-      --max-events <N>        Maximum events to store [default: 1000]  
+      --max-events <N>        Maximum events to store [default: 1000]
   -v, --verbose              Enable verbose logging
       --no-color             Disable colored output
       --extensions <EXTS>    File extensions to watch (e.g., rs,py,js)
@@ -284,24 +300,25 @@ Options:
 
 WatchDiff supports multiple diff algorithms, each optimized for different scenarios:
 
-| Algorithm | Best For | Characteristics |
-|-----------|----------|----------------|
-| **Myers** | General purpose | Fast, widely used, good balance |
+| Algorithm    | Best For         | Characteristics                      |
+| ------------ | ---------------- | ------------------------------------ |
+| **Myers**    | General purpose  | Fast, widely used, good balance      |
 | **Patience** | Code refactoring | Better handling of moved code blocks |
-| **LCS** | Minimal changes | Produces smallest possible diffs |
+| **LCS**      | Minimal changes  | Produces smallest possible diffs     |
 
 ### Export Functionality
 
 When using `--export-dir`, WatchDiff automatically saves patches in multiple formats:
 
 - **Unified diffs** (`.patch` files) - Standard diff format
-- **Git patches** (`.git.patch` files) - Git-compatible format  
+- **Git patches** (`.git.patch` files) - Git-compatible format
 - **Multifile patches** - Combined patches for multiple files
 - **Patch bundles** - Organized directory structure with manifest
 
 ## Examples
 
 ### Development Workflow
+
 ```bash
 # Watch Rust project files only
 watchdiff-tui --extensions rs,toml,md
@@ -314,8 +331,9 @@ watchdiff-tui --output json > changes.log
 ```
 
 ### CI/CD Integration
+
 ```bash
-# Compact format for build scripts  
+# Compact format for build scripts
 watchdiff-tui --output compact --no-color
 
 # Export patches for review process
@@ -344,8 +362,8 @@ let exporter = DiffExporter::unified();
 exporter.export_diff(&result, old_path, new_path, "changes.patch")?;
 
 // Get statistics
-println!("Changes: {} additions, {} deletions", 
-    result.stats.lines_added, 
+println!("Changes: {} additions, {} deletions",
+    result.stats.lines_added,
     result.stats.lines_removed
 );
 ```
@@ -365,6 +383,7 @@ See `examples/advanced_usage.rs` for complete usage examples.
 WatchDiff is built with modern Rust practices and clean architecture:
 
 ### Module Organization
+
 ```
 src/
 ├── core/           # Core file watching and event handling
@@ -383,6 +402,7 @@ src/
 ```
 
 ### Key Dependencies
+
 - **File Watching**: `notify` crate for cross-platform filesystem events
 - **TUI**: `ratatui` with `crossterm` for beautiful terminal interfaces
 - **Syntax Highlighting**: `syntect` crate for 25+ programming languages
@@ -394,6 +414,7 @@ src/
 - **Performance**: `lru` crate for intelligent caching systems
 
 ### Design Principles
+
 - **Trait-based Design**: Extensible algorithms via traits
 - **Separation of Concerns**: Clear module boundaries
 - **Type Safety**: Comprehensive type system usage
@@ -405,6 +426,7 @@ src/
 WatchDiff is built for high-performance file monitoring with several optimizations:
 
 ### Core Performance Features
+
 - **LRU Caching System**: Intelligent caching for file content and syntax highlighting
   - File content cache: 200 files in memory to avoid repeated disk I/O
   - Syntax highlight cache: 100 highlighted files to avoid recomputation
@@ -413,7 +435,8 @@ WatchDiff is built for high-performance file monitoring with several optimizatio
 - **Event Debouncing**: 100ms debounce window reduces processing overhead by 70-90%
 - **Smart Memory Management**: Bounded memory usage with automatic cleanup
 
-### Technical Optimizations  
+### Technical Optimizations
+
 - Handles thousands of files efficiently
 - Memory-bounded event history (configurable)
 - Native filesystem events (with polling fallback)
@@ -422,6 +445,7 @@ WatchDiff is built for high-performance file monitoring with several optimizatio
 - Zero-copy string operations where possible
 
 ### Performance Improvements
+
 - **File Access**: ~20-50x faster for cached content (memory vs disk I/O)
 - **Syntax Highlighting**: ~100-500x faster for cached highlighting
 - **Search Operations**: ~10-40x faster with incremental search
@@ -435,3 +459,4 @@ MIT License - see LICENSE file for details.
 ## Contributing
 
 Contributions welcome! Please open issues or pull requests.
+
