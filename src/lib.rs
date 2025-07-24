@@ -19,6 +19,7 @@ pub mod core;
 pub mod diff;
 pub mod export;
 pub mod highlight;
+pub mod performance;
 pub mod ui;
 
 // Re-export commonly used types for backward compatibility

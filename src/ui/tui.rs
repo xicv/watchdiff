@@ -45,6 +45,70 @@ pub struct SearchState {
 }
 
 impl SearchState {
+    /// Optimized search with caching - called from TuiApp
+    pub fn update_filtered_files_optimized(
+        &mut self,
+        all_files: &std::collections::HashSet<PathBuf>,
+        events: &[crate::core::HighlightedFileEvent],
+        search_cache: &mut crate::performance::SearchResultCache,
+    ) {
+        // Calculate hash of all files to detect file set changes
+        let all_files_hash = self.calculate_files_hash(all_files);
+        
+        if self.query.is_empty() {
+            // Show all files when no query
+            self.filtered_files = all_files.iter().cloned().collect();
+            search_cache.clear();
+        } else if search_cache.can_use_incremental(&self.query, all_files_hash) {
+            // Use incremental search - filter from previous results
+            let base_results = search_cache.get_incremental_base();
+            let mut scored_files: Vec<(PathBuf, i32)> = base_results
+                .iter()
+                .filter_map(|(path, _)| {
+                    let score = self.fuzzy_match(path);
+                    if score > 0 {
+                        Some((path.clone(), score))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Sort by score and recent activity
+            self.sort_search_results(&mut scored_files, events);
+            
+            // Update cache and extract paths
+            search_cache.update(self.query.clone(), scored_files.clone(), all_files_hash);
+            self.filtered_files = scored_files.into_iter().map(|(path, _)| path).collect();
+        } else {
+            // Full search - no cache benefit
+            let mut scored_files: Vec<(PathBuf, i32)> = all_files
+                .iter()
+                .filter_map(|path| {
+                    let score = self.fuzzy_match(path);
+                    if score > 0 {
+                        Some((path.clone(), score))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            
+            // Sort by score and recent activity
+            self.sort_search_results(&mut scored_files, events);
+            
+            // Update cache and extract paths
+            search_cache.update(self.query.clone(), scored_files.clone(), all_files_hash);
+            self.filtered_files = scored_files.into_iter().map(|(path, _)| path).collect();
+        }
+        
+        // Reset selection if out of bounds
+        if self.selected_index >= self.filtered_files.len() {
+            self.selected_index = 0;
+        }
+    }
+
+    /// Legacy method for backward compatibility
     pub fn update_filtered_files(&mut self, all_files: &std::collections::HashSet<PathBuf>, events: &[crate::core::HighlightedFileEvent]) {
         if self.query.is_empty() {
             // Show all files when no query
@@ -141,6 +205,37 @@ impl SearchState {
     
     pub fn get_selected_file(&self) -> Option<&PathBuf> {
         self.filtered_files.get(self.selected_index)
+    }
+
+    /// Calculate a hash of all files for cache invalidation
+    fn calculate_files_hash(&self, all_files: &std::collections::HashSet<PathBuf>) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        let mut sorted_files: Vec<_> = all_files.iter().collect();
+        sorted_files.sort(); // Ensure consistent hash regardless of iteration order
+        
+        for file in sorted_files {
+            file.hash(&mut hasher);
+        }
+        
+        hasher.finish()
+    }
+
+    /// Sort search results by score and recent activity
+    fn sort_search_results(&self, scored_files: &mut Vec<(PathBuf, i32)>, events: &[crate::core::HighlightedFileEvent]) {
+        scored_files.sort_by(|a, b| {
+            let score_cmp = b.1.cmp(&a.1);
+            if score_cmp == std::cmp::Ordering::Equal {
+                // If scores are equal, prioritize recently changed files
+                let a_recent = events.iter().any(|e| e.path == a.0);
+                let b_recent = events.iter().any(|e| e.path == b.0);
+                b_recent.cmp(&a_recent)
+            } else {
+                score_cmp
+            }
+        });
     }
     
     pub fn move_up(&mut self) {
@@ -239,6 +334,8 @@ pub struct TuiApp {
     pub vim_key_sequence: VimKeySequence,
     pub app_mode: AppMode,
     pub search_state: SearchState,
+    pub performance_cache: crate::performance::PerformanceCache,
+    pub syntax_highlighter: crate::highlight::SyntaxHighlighter,
 }
 
 impl TuiApp {
@@ -261,6 +358,8 @@ impl TuiApp {
             vim_key_sequence: VimKeySequence::default(),
             app_mode: AppMode::Normal,
             search_state: SearchState::default(),
+            performance_cache: crate::performance::PerformanceCache::new(),
+            syntax_highlighter: crate::highlight::SyntaxHighlighter::new(),
         }
     }
 
@@ -268,16 +367,27 @@ impl TuiApp {
         loop {
             terminal.draw(|f| self.ui(f))?;
 
-            // Handle file watcher events
+            // Handle file watcher events with debouncing
             match self.watcher.recv_timeout(Duration::from_millis(50)) {
                 Ok(AppEvent::FileChanged(file_event)) => {
-                    self.state.add_event(file_event);
+                    // Add to debouncer instead of processing immediately
+                    self.performance_cache.event_debouncer.add_event(file_event);
                 }
                 Ok(AppEvent::Quit) => {
                     self.should_quit = true;
                 }
                 Ok(_) => {}
                 Err(_) => {} // Timeout, continue
+            }
+
+            // Process debounced events that are ready
+            let ready_events = self.performance_cache.event_debouncer.get_ready_events();
+            for file_event in ready_events {
+                // Invalidate caches for changed files
+                self.performance_cache.invalidate_file(&file_event.path);
+                
+                // Add event to state
+                self.state.add_event(file_event);
             }
 
             // Handle keyboard input
@@ -366,8 +476,8 @@ impl TuiApp {
                                 }
                             }
                             KeyCode::Right => {
-                                let max_scroll = self.state.watched_files.len().saturating_sub(1);
-                                if self.file_list_scroll < max_scroll {
+                                // Only allow scrolling if there are long paths that need it
+                                if !self.state.watched_files.is_empty() {
                                     self.file_list_scroll += 1;
                                 }
                             }
@@ -592,22 +702,43 @@ impl TuiApp {
                     Style::default().fg(Color::Rgb(180, 180, 180)).bg(Color::Rgb(20, 20, 25))
                 };
                 
-                let filename = path.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| path.display().to_string());
-                let parent = path.parent()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default();
+                // Apply horizontal scrolling to the full path display
+                let full_path = path.display().to_string();
+                // Use a reasonable max width for horizontal scrolling instead of full terminal width
+                // This makes scrolling visible on wide terminals
+                let max_display_width = 120; // Maximum characters to display before scrolling
+                let available_width = (area.width.saturating_sub(6) as usize).min(max_display_width);
+                
+                // Debug: Store available width for title display
+                let _debug_available_width = available_width;
+                
+                let displayed_path = if full_path.len() > available_width {
+                    // Apply scroll position to long paths
+                    if self.file_list_scroll > 0 {
+                        // Calculate how much we can actually scroll for this specific path
+                        let max_scroll_for_path = full_path.len().saturating_sub(available_width.saturating_sub(1)); // -1 for ellipsis space
+                        let actual_scroll = self.file_list_scroll.min(max_scroll_for_path);
+                        
+                        if actual_scroll > 0 {
+                            let start_idx = actual_scroll;
+                            let end_idx = (start_idx + available_width.saturating_sub(1)).min(full_path.len());
+                            format!("…{}", &full_path[start_idx..end_idx])
+                        } else {
+                            // Can't scroll this path, just truncate normally
+                            format!("{}…", &full_path[..available_width.saturating_sub(1)])
+                        }
+                    } else {
+                        // No scroll, just truncate
+                        format!("{}…", &full_path[..available_width.saturating_sub(1)])
+                    }
+                } else {
+                    // Short path, no truncation needed
+                    full_path
+                };
                 
                 ListItem::new(Line::from(vec![
                     Span::styled("📄 ", Style::default().fg(Color::Cyan)),
-                    Span::styled(filename, style.add_modifier(Modifier::BOLD)),
-                    if !parent.is_empty() {
-                        Span::styled(format!(" ({})", parent), Style::default().fg(Color::Rgb(120, 120, 120)))
-                    } else {
-                        Span::raw("")
-                    }
+                    Span::styled(displayed_path, style),
                 ]))
             })
             .collect();
@@ -617,7 +748,11 @@ impl TuiApp {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Rgb(80, 80, 80)))
-                    .title(format!(" 📁 Watched Files ({}) (←→ to scroll) ", self.state.watched_files.len()))
+                    .title(format!(" 📁 Watched Files ({}) (←→ to scroll) [scroll:{} w:{}] ", 
+                        self.state.watched_files.len(), 
+                        self.file_list_scroll,
+                        (area.width.saturating_sub(6) as usize).min(120) // Show the actual available width used
+                    ))
                     .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
             )
             .highlight_style(Style::default().bg(Color::Rgb(0, 50, 100)).add_modifier(Modifier::BOLD));
@@ -745,8 +880,12 @@ impl TuiApp {
     }
 
     fn render_search_results(&mut self, f: &mut Frame, area: Rect) {
-        // Update filtered files based on current query
-        self.search_state.update_filtered_files(&self.state.watched_files, &self.state.highlighted_events);
+        // Update filtered files based on current query using performance cache
+        self.search_state.update_filtered_files_optimized(
+            &self.state.watched_files,
+            &self.state.highlighted_events,
+            &mut self.performance_cache.search_results,
+        );
         
         let items: Vec<ListItem> = self.search_state.filtered_files
             .iter()
@@ -798,25 +937,25 @@ impl TuiApp {
     }
 
     fn render_file_preview(&mut self, f: &mut Frame, area: Rect) {
-        let selected_file = self.search_state.get_selected_file();
+        let selected_file = self.search_state.get_selected_file().cloned();
         
         if let Some(file_path) = selected_file {
-            // Try to read file content
-            match std::fs::read_to_string(file_path) {
+            // Try to read file content using performance cache
+            match self.performance_cache.file_content.get_content(&file_path) {
                 Ok(content) => {
-                    let language = crate::highlight::SyntaxHighlighter::default()
-                        .get_language_from_path(file_path)
+                    let language = self.syntax_highlighter
+                        .get_language_from_path(&file_path)
                         .unwrap_or_else(|| "Plain Text".to_string());
                     
                     // Check if file has recent changes for diff preview
                     let recent_event = self.state.highlighted_events
                         .iter()
-                        .find(|e| e.path == *file_path);
+                        .find(|e| e.path == file_path);
                     
                     if let Some(event) = recent_event {
-                        self.render_diff_preview(f, area, file_path, &content, event);
+                        self.render_diff_preview(f, area, &file_path, &content, event);
                     } else {
-                        self.render_file_content_preview(f, area, file_path, &content, &language);
+                        self.render_file_content_preview(f, area, &file_path, &content, &language);
                     }
                 }
                 Err(_) => {
@@ -850,16 +989,21 @@ impl TuiApp {
         }
     }
 
-    fn render_file_content_preview(&self, f: &mut Frame, area: Rect, file_path: &std::path::Path, content: &str, language: &str) {
+    fn render_file_content_preview(&mut self, f: &mut Frame, area: Rect, file_path: &std::path::Path, content: &str, language: &str) {
         let visible_height = area.height as usize - 2; // Account for borders
         let lines: Vec<&str> = content.lines().collect();
         
         let start_line = self.search_state.preview_scroll;
         let end_line = (start_line + visible_height).min(lines.len());
         
-        // Create syntax highlighter and highlight entire content for better state management
-        let highlighter = crate::highlight::SyntaxHighlighter::default();
-        let highlighted_content = highlighter.highlight_code(content, language);
+        // Always highlight entire content for proper syntax context
+        // The LRU cache will handle memory management efficiently
+        let highlighted_content = self.performance_cache.syntax_highlight.get_highlighted_content(
+            &file_path.to_path_buf(),
+            content,
+            language,
+            &self.syntax_highlighter,
+        );
         
         let visible_lines: Vec<Line> = (start_line..end_line)
             .map(|absolute_line_idx| {
@@ -872,7 +1016,10 @@ impl TuiApp {
                 let mut spans = vec![line_num_span];
                 
                 // Get highlighted spans for this line from the pre-highlighted content
-                if let Some(line_spans) = highlighted_content.get(absolute_line_idx) {
+                // Always use absolute index since we now highlight entire content
+                let highlight_idx = absolute_line_idx;
+                
+                if let Some(line_spans) = highlighted_content.get(highlight_idx) {
                     for (style, text) in line_spans {
                         spans.push(Span::styled(text.clone(), style.clone()));
                     }
@@ -1353,8 +1500,8 @@ impl TuiApp {
     }
     
     fn vim_move_right(&mut self) {
-        let max_scroll = self.state.watched_files.len().saturating_sub(1);
-        if self.file_list_scroll < max_scroll {
+        // Only allow scrolling if there are files to scroll
+        if !self.state.watched_files.is_empty() {
             self.file_list_scroll += 1;
         }
     }
@@ -1376,9 +1523,9 @@ impl TuiApp {
     }
     
     fn vim_line_end(&mut self) {
-        // In diff view context, move to rightmost position
-        let max_scroll = self.state.watched_files.len().saturating_sub(1);
-        self.file_list_scroll = max_scroll;
+        // In diff view context, move to rightmost position of file list
+        // Set to a high value, the render function will clamp it appropriately
+        self.file_list_scroll = 1000; // Will be clamped during rendering
     }
     
     fn vim_goto_top(&mut self) {

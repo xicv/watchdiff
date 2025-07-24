@@ -51,5 +51,8 @@ ctrlc = "3.4"
 # Date/time for export functionality
 chrono = { version = "0.4", features = ["serde"] }
 
+# Performance optimization
+lru = "0.12"
+
 [dev-dependencies]
 tempfile = "3.8"

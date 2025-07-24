@@ -1614,6 +1614,7 @@ dependencies = [
  "crossterm",
  "ctrlc",
  "ignore",
+ "lru",
  "notify",
  "ratatui",
  "serde",
