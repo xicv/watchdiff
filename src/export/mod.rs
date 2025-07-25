@@ -287,6 +287,9 @@ mod tests {
             timestamp: SystemTime::now(),
             diff: Some("--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new".to_string()),
             content_preview: None,
+            origin: crate::core::ChangeOrigin::Unknown,
+            confidence: None,
+            batch_id: None,
         };
         
         let exporter = DiffExporter::unified();

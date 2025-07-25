@@ -18,6 +18,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use crate::core::{AppEvent, AppState, FileEventKind, FileWatcher, HighlightedFileEvent};
+use crate::review::{ReviewSession, ReviewAction, ReviewNavigationAction};
 use std::time::Instant;
 
 /// Vim mode for enhanced navigation
@@ -33,6 +34,7 @@ pub enum AppMode {
     Normal,
     Search,
     Help,
+    Review,
 }
 
 /// Search mode state for fuzzy file search
@@ -334,6 +336,7 @@ pub struct TuiApp {
     pub vim_key_sequence: VimKeySequence,
     pub app_mode: AppMode,
     pub search_state: SearchState,
+    pub review_session: Option<ReviewSession>,
     pub performance_cache: crate::performance::PerformanceCache,
     pub syntax_highlighter: crate::highlight::SyntaxHighlighter,
 }
@@ -358,6 +361,7 @@ impl TuiApp {
             vim_key_sequence: VimKeySequence::default(),
             app_mode: AppMode::Normal,
             search_state: SearchState::default(),
+            review_session: None,
             performance_cache: crate::performance::PerformanceCache::new(),
             syntax_highlighter: crate::highlight::SyntaxHighlighter::new(),
         }
@@ -400,6 +404,13 @@ impl TuiApp {
                                 continue; // Key was handled by search mode
                             }
                         }
+                        
+                        // Handle review mode keys
+                        if self.app_mode == AppMode::Review {
+                            if self.handle_review_keys(&key) {
+                                continue; // Key was handled by review mode
+                            }
+                        }
 
                         // Handle vim mode toggle and key sequences
                         if self.handle_vim_keys(&key) {
@@ -416,6 +427,10 @@ impl TuiApp {
                                     }
                                     AppMode::Help => {
                                         // Exit help mode
+                                        self.app_mode = AppMode::Normal;
+                                    }
+                                    AppMode::Review => {
+                                        // Exit review mode
                                         self.app_mode = AppMode::Normal;
                                     }
                                     AppMode::Normal => {
@@ -445,6 +460,10 @@ impl TuiApp {
                                 // Enter search mode (Ctrl+P alternative)
                                 self.app_mode = AppMode::Search;
                                 self.search_state.clear();
+                            },
+                            KeyCode::Char('r') => {
+                                // Enter review mode
+                                self.enter_review_mode();
                             },
                             KeyCode::Up | KeyCode::Char('k') => {
                                 if self.diff_scroll > 0 {
@@ -503,6 +522,10 @@ impl TuiApp {
             }
             AppMode::Search => {
                 self.render_search_mode(f);
+                return;
+            }
+            AppMode::Review => {
+                self.render_review_mode(f);
                 return;
             }
             AppMode::Normal => {
@@ -604,15 +627,57 @@ impl TuiApp {
             FileEventKind::Moved { .. } => ("●", "MOVED", Color::Blue, Color::Rgb(0, 0, 40)),
         };
 
-        // Modern header with better visual separation
+        // Get confidence and origin indicators
+        let (confidence_symbol, confidence_color) = if let Some(ref confidence) = event.confidence {
+            match confidence.level {
+                crate::core::ConfidenceLevel::Safe => ("🟢", Color::Green),
+                crate::core::ConfidenceLevel::Review => ("🟡", Color::Yellow), 
+                crate::core::ConfidenceLevel::Risky => ("🔴", Color::Red),
+            }
+        } else {
+            ("⚪", Color::Gray)
+        };
+
+        let origin_info = match &event.origin {
+            crate::core::ChangeOrigin::Human => ("👤", "HUMAN", Color::Cyan),
+            crate::core::ChangeOrigin::AIAgent { tool_name, .. } => ("🤖", tool_name.as_str(), Color::Magenta),
+            crate::core::ChangeOrigin::Tool { name } => ("🔧", name.as_str(), Color::Blue),
+            crate::core::ChangeOrigin::Unknown => ("❓", "UNKNOWN", Color::Gray),
+        };
+
+        // Modern header with confidence and origin indicators
         lines.push(Line::from(vec![
             Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::Rgb(100, 100, 100))),
+            Span::styled(confidence_symbol, Style::default().fg(confidence_color)),
             Span::styled(format!(" {} {} ", event_symbol, event_type), 
                 Style::default().fg(color).bg(bg_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {} ", origin_info.0), Style::default().fg(origin_info.2)),
+            Span::styled(format!("{} ", origin_info.1), Style::default().fg(origin_info.2).add_modifier(Modifier::ITALIC)),
             Span::styled(format!(" {} ", event.path.display()), 
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         ]));
         
+        // Add confidence details if available
+        if let Some(ref confidence) = event.confidence {
+            if !confidence.reasons.is_empty() {
+                let reasons_text = confidence.reasons.join(", ");
+                lines.push(Line::from(vec![
+                    Span::styled("| ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                    Span::styled(format!("Confidence: {:.1}% - {}", confidence.score * 100.0, reasons_text), 
+                        Style::default().fg(Color::Rgb(150, 150, 150)).add_modifier(Modifier::ITALIC)),
+                ]));
+            }
+        }
+
+        // Add batch information if available
+        if let Some(ref batch_id) = event.batch_id {
+            lines.push(Line::from(vec![
+                Span::styled("| ", Style::default().fg(Color::Rgb(60, 60, 60))),
+                Span::styled(format!("Batch: {}", batch_id), 
+                    Style::default().fg(Color::Rgb(120, 120, 120)).add_modifier(Modifier::ITALIC)),
+            ]));
+        }
+
         // Add a subtle separator line
         lines.push(Line::from(Span::styled("|--", Style::default().fg(Color::Rgb(60, 60, 60)))));
 
@@ -823,6 +888,24 @@ impl TuiApp {
             .alignment(Alignment::Center);
 
         f.render_widget(status, area);
+    }
+
+    fn render_review_mode(&mut self, f: &mut Frame) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Min(3),         // Review header with stats
+                Constraint::Percentage(60), // Current change diff
+                Constraint::Percentage(25), // Hunk list
+                Constraint::Min(3),         // Review controls help
+            ])
+            .split(f.area());
+
+        self.render_review_header(f, chunks[0]);
+        self.render_review_diff(f, chunks[1]);
+        self.render_review_hunks(f, chunks[2]);
+        self.render_review_controls(f, chunks[3]);
     }
 
     fn render_search_mode(&mut self, f: &mut Frame) {
@@ -1552,6 +1635,550 @@ impl TuiApp {
     
     fn vim_page_up(&mut self) {
         self.diff_scroll = self.diff_scroll.saturating_sub(20);
+    }
+    
+    /// Enter interactive review mode
+    fn enter_review_mode(&mut self) {
+        if self.review_session.is_none() {
+            let mut session = ReviewSession::new();
+            
+            // Add all current events to the review session
+            for event in &self.state.events {
+                session.add_change(event.clone());
+            }
+            
+            // Only enter review mode if there are changes to review
+            if !session.changes.is_empty() {
+                self.review_session = Some(session);
+                self.app_mode = AppMode::Review;
+            }
+        } else {
+            // Resume existing review session
+            self.app_mode = AppMode::Review;
+        }
+    }
+    
+    /// Handle keyboard input in review mode
+    fn handle_review_keys(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        
+        match key.code {
+            // Accept current hunk/change
+            KeyCode::Char('a') => {
+                self.review_accept_current();
+                true
+            }
+            // Reject current hunk/change
+            KeyCode::Char('d') => {
+                self.review_reject_current();
+                true
+            }
+            // Skip current hunk/change
+            KeyCode::Char('s') => {
+                self.review_skip_current();
+                true
+            }
+            // Accept all hunks in current change
+            KeyCode::Char('A') => {
+                self.review_accept_all_current();
+                true
+            }
+            // Reject all hunks in current change
+            KeyCode::Char('D') => {
+                self.review_reject_all_current();
+                true
+            }
+            // Navigate to next change
+            KeyCode::Char('n') | KeyCode::Right => {
+                self.review_next_change();
+                true
+            }
+            // Navigate to previous change
+            KeyCode::Char('p') | KeyCode::Left => {
+                self.review_previous_change();
+                true
+            }
+            // Navigate to next hunk
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.review_next_hunk();
+                true
+            }
+            // Navigate to previous hunk
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.review_previous_hunk();
+                true
+            }
+            // Jump to next risky change
+            KeyCode::Char('R') => {
+                self.review_next_risky();
+                true
+            }
+            // Jump to first unreviewed
+            KeyCode::Char('u') => {
+                self.review_first_unreviewed();
+                true
+            }
+            // Toggle filters
+            KeyCode::Char('f') => {
+                self.review_toggle_filters();
+                true
+            }
+            // Filter presets (1-5 keys)
+            KeyCode::Char('1') => {
+                self.apply_filter_preset(0);
+                true
+            }
+            KeyCode::Char('2') => {
+                self.apply_filter_preset(1);
+                true
+            }
+            KeyCode::Char('3') => {
+                self.apply_filter_preset(2);
+                true
+            }
+            KeyCode::Char('4') => {
+                self.apply_filter_preset(3);
+                true
+            }
+            KeyCode::Char('5') => {
+                self.apply_filter_preset(4);
+                true
+            }
+            // Session management
+            KeyCode::Char('S') => {
+                self.save_review_session();
+                true
+            }
+            KeyCode::Char('L') => {
+                self.show_session_list();
+                true
+            }
+            // Show help
+            KeyCode::Char('?') => {
+                // Could show review-specific help
+                self.app_mode = AppMode::Help;
+                true
+            }
+            _ => false, // Let other keys pass through to main handler
+        }
+    }
+    
+    /// Review action implementations
+    fn review_accept_current(&mut self) {
+        let hunk_id = if let Some(ref session) = self.review_session {
+            session.get_current_hunk().map(|h| h.id.clone())
+        } else {
+            None
+        };
+        
+        if let (Some(hunk_id), Some(ref mut session)) = (hunk_id, &mut self.review_session) {
+            if let Some(current_change) = session.get_current_change_mut() {
+                current_change.accept_hunk(&hunk_id);
+            }
+        }
+    }
+    
+    fn review_reject_current(&mut self) {
+        let hunk_id = if let Some(ref session) = self.review_session {
+            session.get_current_hunk().map(|h| h.id.clone())
+        } else {
+            None
+        };
+        
+        if let (Some(hunk_id), Some(ref mut session)) = (hunk_id, &mut self.review_session) {
+            if let Some(current_change) = session.get_current_change_mut() {
+                current_change.reject_hunk(&hunk_id);
+            }
+        }
+    }
+    
+    fn review_skip_current(&mut self) {
+        let hunk_id = if let Some(ref session) = self.review_session {
+            session.get_current_hunk().map(|h| h.id.clone())
+        } else {
+            None
+        };
+        
+        if let (Some(hunk_id), Some(ref mut session)) = (hunk_id, &mut self.review_session) {
+            if let Some(current_change) = session.get_current_change_mut() {
+                current_change.skip_hunk(&hunk_id);
+            }
+        }
+    }
+    
+    fn review_accept_all_current(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            if let Some(current_change) = session.get_current_change_mut() {
+                current_change.accept_all();
+            }
+        }
+    }
+    
+    fn review_reject_all_current(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            if let Some(current_change) = session.get_current_change_mut() {
+                current_change.reject_all();
+            }
+        }
+    }
+    
+    fn review_next_change(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            session.navigate(ReviewNavigationAction::NextChange);
+        }
+    }
+    
+    fn review_previous_change(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            session.navigate(ReviewNavigationAction::PreviousChange);
+        }
+    }
+    
+    fn review_next_hunk(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            session.navigate(ReviewNavigationAction::NextHunk);
+        }
+    }
+    
+    fn review_previous_hunk(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            session.navigate(ReviewNavigationAction::PreviousHunk);
+        }
+    }
+    
+    fn review_next_risky(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            session.navigate(ReviewNavigationAction::NextRiskyChange);
+        }
+    }
+    
+    fn review_first_unreviewed(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            session.navigate(ReviewNavigationAction::FirstUnreviewed);
+        }
+    }
+    
+    fn review_toggle_filters(&mut self) {
+        if let Some(ref mut session) = self.review_session {
+            // Toggle between different filter states
+            if session.filters.show_only_risky {
+                session.filters.show_only_risky = false;
+                session.filters.show_only_ai_changes = true;
+            } else if session.filters.show_only_ai_changes {
+                session.filters.show_only_ai_changes = false;
+            } else {
+                session.filters.show_only_risky = true;
+            }
+        }
+    }
+    
+    /// Apply a filter preset by index
+    fn apply_filter_preset(&mut self, preset_index: usize) {
+        if let Some(ref mut session) = self.review_session {
+            let presets = ReviewSession::get_default_presets();
+            if let Some(preset) = presets.get(preset_index) {
+                session.apply_filter_preset(preset);
+            }
+        }
+    }
+    
+    /// Save current review session to disk
+    fn save_review_session(&mut self) {
+        if let Some(ref session) = self.review_session {
+            // Try to save to current directory or a default location
+            let base_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            match session.save_to_disk(&base_dir) {
+                Ok(saved_path) => {
+                    // Could show a success message - for now just continue silently
+                    let _ = saved_path;
+                }
+                Err(_) => {
+                    // Could show an error message - for now just continue silently
+                }
+            }
+        }
+    }
+    
+    /// Show list of saved sessions (placeholder for future implementation)
+    fn show_session_list(&mut self) {
+        // For now, just return - in the future this could show a session picker
+        // that allows loading saved sessions
+    }
+    
+    /// Render the review mode header with session stats and current file info
+    fn render_review_header(&mut self, f: &mut Frame, area: Rect) {
+        let session = match &self.review_session {
+            Some(s) => s,
+            None => {
+                let no_session = Paragraph::new("No active review session")
+                    .block(Block::default().borders(Borders::ALL).title(" Review Mode "));
+                f.render_widget(no_session, area);
+                return;
+            }
+        };
+        
+        let stats = session.get_review_stats();
+        let current_change = session.get_current_change();
+        
+        // Create filter indicator
+        let filter_text = self.get_active_filters_text(&session.filters);
+        
+        let header_text = if let Some(change) = current_change {
+            let confidence_text = if let Some(ref conf) = change.event.confidence {
+                format!(" {:.0}%", conf.score * 100.0)
+            } else {
+                " N/A".to_string()
+            };
+            
+            let origin_text = match &change.event.origin {
+                crate::core::ChangeOrigin::AIAgent { tool_name, .. } => format!("🤖 {}", tool_name),
+                crate::core::ChangeOrigin::Human => "👤 Human".to_string(),
+                crate::core::ChangeOrigin::Tool { name } => format!("🔧 {}", name),
+                crate::core::ChangeOrigin::Unknown => "❓ Unknown".to_string(),
+            };
+            
+            let mut lines = vec![
+                format!(
+                    "📁 {} | {} | Confidence:{} | Progress: {}/{} ({:.1}%)",
+                    change.event.path.display(),
+                    origin_text,
+                    confidence_text,
+                    stats.total - stats.pending,
+                    stats.total,
+                    stats.completion_percentage()
+                )
+            ];
+            
+            if !filter_text.is_empty() {
+                lines.push(format!("🔍 Filters: {}", filter_text));
+            }
+            
+            lines.join("\n")
+        } else {
+            let mut lines = vec![
+                format!(
+                    "No changes to review | Progress: {}/{} ({:.1}%)",
+                    stats.total - stats.pending,
+                    stats.total,
+                    stats.completion_percentage()
+                )
+            ];
+            
+            if !filter_text.is_empty() {
+                lines.push(format!("🔍 Filters: {}", filter_text));
+            }
+            
+            lines.join("\n")
+        };
+        
+        let header = Paragraph::new(header_text)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(" 🔍 Interactive Review Mode ")
+                .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)))
+            .wrap(Wrap { trim: true });
+        
+        f.render_widget(header, area);
+    }
+    
+    /// Get text description of active filters
+    fn get_active_filters_text(&self, filters: &crate::review::ReviewFilters) -> String {
+        let mut active_filters = Vec::new();
+        
+        if filters.show_only_risky {
+            active_filters.push("Risky Only".to_string());
+        }
+        if filters.show_only_ai_changes {
+            active_filters.push("AI Only".to_string());
+        }
+        if filters.show_only_pending {
+            active_filters.push("Pending Only".to_string());
+        }
+        if filters.exclude_reviewed {
+            active_filters.push("Exclude Reviewed".to_string());
+        }
+        if let Some(ref level) = filters.confidence_level {
+            active_filters.push(format!("Confidence: {:?}", level));
+        }
+        if let Some(threshold) = filters.confidence_threshold {
+            active_filters.push(format!("Threshold: {:.0}%", threshold * 100.0));
+        }
+        if let Some(ref pattern) = filters.file_pattern {
+            active_filters.push(format!("Pattern: {}", pattern));
+        }
+        if let Some(min) = filters.min_hunks {
+            active_filters.push(format!("Min Hunks: {}", min));
+        }
+        if let Some(max) = filters.max_hunks {
+            active_filters.push(format!("Max Hunks: {}", max));
+        }
+        
+        if active_filters.is_empty() {
+            String::new()
+        } else {
+            active_filters.join(", ")
+        }
+    }
+    
+    /// Render the current change's diff with hunk highlighting
+    fn render_review_diff(&mut self, f: &mut Frame, area: Rect) {
+        let session = match &self.review_session {
+            Some(s) => s,
+            None => return,
+        };
+        
+        let current_change = match session.get_current_change() {
+            Some(c) => c,
+            None => {
+                let empty = Paragraph::new("No changes to review")
+                    .block(Block::default().borders(Borders::ALL).title(" Current Change "));
+                f.render_widget(empty, area);
+                return;
+            }
+        };
+        
+        let current_hunk = session.get_current_hunk();
+        let mut lines = Vec::new();
+        
+        // Show file header
+        lines.push(Line::from(vec![
+            Span::styled(format!("--- {}", current_change.event.path.display()), 
+                Style::default().fg(Color::Red)),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(format!("+++ {}", current_change.event.path.display()), 
+                Style::default().fg(Color::Green)),
+        ]));
+        
+        // Show hunks with highlighting for current hunk
+        for (_hunk_idx, hunk) in current_change.hunks.iter().enumerate() {
+            let is_current_hunk = current_hunk.map(|h| h.id == hunk.id).unwrap_or(false);
+            let action = current_change.review_actions.get(&hunk.id).unwrap_or(&ReviewAction::Pending);
+            
+            // Hunk header with review status
+            let status_symbol = match action {
+                ReviewAction::Accept => "✅",
+                ReviewAction::Reject => "❌", 
+                ReviewAction::Skip => "⏭️",
+                ReviewAction::Pending => "⏳",
+            };
+            
+            let header_style = if is_current_hunk {
+                Style::default().bg(Color::DarkGray).fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} {} ", status_symbol, hunk.header), header_style),
+            ]));
+            
+            // Show hunk lines
+            for line in &hunk.lines {
+                let line_style = if is_current_hunk {
+                    if line.starts_with('+') {
+                        Style::default().fg(Color::Green).bg(Color::Rgb(0, 25, 0))
+                    } else if line.starts_with('-') {
+                        Style::default().fg(Color::Red).bg(Color::Rgb(25, 0, 0))
+                    } else {
+                        Style::default().bg(Color::Rgb(10, 10, 10))
+                    }
+                } else {
+                    if line.starts_with('+') {
+                        Style::default().fg(Color::Green)
+                    } else if line.starts_with('-') {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    }
+                };
+                
+                lines.push(Line::from(vec![
+                    Span::styled(line.clone(), line_style),
+                ]));
+            }
+            lines.push(Line::from(""));
+        }
+        
+        let diff_widget = Paragraph::new(lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(" Current Change Diff ")
+                .title_style(Style::default().fg(Color::Cyan)))
+            .wrap(Wrap { trim: true });
+        
+        f.render_widget(diff_widget, area);
+    }
+    
+    /// Render the list of hunks with their review status
+    fn render_review_hunks(&mut self, f: &mut Frame, area: Rect) {
+        let session = match &self.review_session {
+            Some(s) => s,
+            None => return,
+        };
+        
+        let current_change = match session.get_current_change() {
+            Some(c) => c,
+            None => return,
+        };
+        
+        let current_hunk = session.get_current_hunk();
+        let items: Vec<ListItem> = current_change.hunks.iter().enumerate().map(|(idx, hunk)| {
+            let is_current = current_hunk.map(|h| h.id == hunk.id).unwrap_or(false);
+            let action = current_change.review_actions.get(&hunk.id).unwrap_or(&ReviewAction::Pending);
+            
+            let status_symbol = match action {
+                ReviewAction::Accept => "✅",
+                ReviewAction::Reject => "❌",
+                ReviewAction::Skip => "⏭️", 
+                ReviewAction::Pending => "⏳",
+            };
+            
+            let hunk_type_symbol = match hunk.hunk_type {
+                crate::review::HunkType::Addition => "+",
+                crate::review::HunkType::Deletion => "-",
+                crate::review::HunkType::Modification => "~",
+                crate::review::HunkType::Context => " ",
+            };
+            
+            let text = format!("{} {} Hunk {} ({}:{})", 
+                status_symbol, hunk_type_symbol, idx + 1, hunk.old_start, hunk.new_start);
+            
+            let style = if is_current {
+                Style::default().bg(Color::DarkGray).fg(Color::White)
+            } else {
+                Style::default()
+            };
+            
+            ListItem::new(text).style(style)
+        }).collect();
+        
+        let hunks_list = List::new(items)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(" Hunks ")
+                .title_style(Style::default().fg(Color::Yellow)));
+        
+        f.render_widget(hunks_list, area);
+    }
+    
+    /// Render the review controls help
+    fn render_review_controls(&mut self, f: &mut Frame, area: Rect) {
+        let controls_lines = vec![
+            "Review: a=Accept | d=Reject | s=Skip | A=Accept All | D=Reject All",
+            "Navigate: n/p=Next/Prev Change | j/k=Next/Prev Hunk | R=Next Risky | u=First Unreviewed",
+            "Filter Presets: 1=Risky | 2=AI | 3=Pending | 4=Low Confidence | 5=Large Changes",
+            "Session: S=Save | L=Load | f=Toggle Filters | ?=Help | q=Exit"
+        ];
+        
+        let controls = Paragraph::new(controls_lines.join("\n"))
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(" Controls ")
+                .title_style(Style::default().fg(Color::Green)))
+            .wrap(Wrap { trim: true });
+        
+        f.render_widget(controls, area);
     }
 }
 

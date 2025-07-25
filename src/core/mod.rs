@@ -8,5 +8,6 @@ pub mod filter;
 
 // Re-export main types
 pub use events::{FileEvent, FileEventKind, HighlightedFileEvent, AppState, AppEvent};
+pub use events::{ChangeOrigin, ChangeConfidence, ConfidenceLevel};
 pub use watcher::FileWatcher;
 pub use filter::FileFilter;

@@ -1,7 +1,7 @@
 use watchdiff_tui::{
     diff::{DiffGenerator, DiffAlgorithmType, DiffFormatter},
     export::DiffExporter,
-    core::{FileEvent, FileEventKind},
+    core::{FileEvent, FileEventKind, ChangeOrigin},
 };
 use std::path::Path;
 use std::time::SystemTime;
@@ -120,6 +120,9 @@ fn demo_export_functionality() -> anyhow::Result<()> {
             timestamp: SystemTime::now(),
             diff: Some("--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,3 +1,4 @@\n fn main() {\n+    println!(\"Hello!\");\n     println!(\"World!\");\n }".to_string()),
             content_preview: None,
+            origin: ChangeOrigin::Unknown,
+            confidence: None,
+            batch_id: None,
         },
         FileEvent {
             path: Path::new("Cargo.toml").to_path_buf(),
@@ -127,6 +130,9 @@ fn demo_export_functionality() -> anyhow::Result<()> {
             timestamp: SystemTime::now(),
             diff: Some("--- a/Cargo.toml\n+++ b/Cargo.toml\n@@ -1,4 +1,5 @@\n [package]\n name = \"example\"\n version = \"0.1.0\"\n+edition = \"2021\"".to_string()),
             content_preview: None,
+            origin: ChangeOrigin::Unknown,
+            confidence: None,
+            batch_id: None,
         },
     ];
     

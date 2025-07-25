@@ -54,5 +54,8 @@ chrono = { version = "0.4", features = ["serde"] }
 # Performance optimization
 lru = "0.12"
 
+# AI pattern detection
+regex = "1.10"
+
 [dev-dependencies]
 tempfile = "3.8"

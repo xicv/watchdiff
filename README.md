@@ -1,8 +1,18 @@
 # WatchDiff 🔭
 
-A professional-grade file watcher with beautiful TUI, multiple diff algorithms, and comprehensive patch export capabilities, written in Rust.
+A professional-grade AI collaboration tool with beautiful TUI, intelligent change analysis, and interactive review capabilities. The ultimate file watcher for developers working with AI coding assistants like Claude Code, Gemini CLI, and other AI agents.
 
 ## Features
+
+### AI Collaboration Features ✨
+
+- 🤖 **AI Change Detection**: Automatically detect and label changes from AI tools (Claude Code, Gemini CLI, Cursor, etc.)
+- 🎯 **Confidence Scoring**: Intelligent risk assessment for AI-generated code with pattern detection
+- 🔍 **Interactive Review Mode**: git add -p style hunk-by-hunk review with accept/reject workflow
+- 📊 **Advanced Filtering**: Filter changes by confidence, origin, file patterns, and review status
+- 💾 **Session Persistence**: Save and resume review sessions with full state management
+- ⚡ **Filter Presets**: One-key access to common filtering scenarios (risky, AI-only, pending, etc.)
+- 📈 **Visual Indicators**: Color-coded confidence levels and origin tracking in real-time
 
 ### Core Capabilities
 
@@ -165,10 +175,12 @@ WatchDiff features a modern, responsive terminal user interface built with ratat
 
 #### Keyboard Shortcuts
 
+**Normal Mode:**
 | Key           | Action                       |
 | ------------- | ---------------------------- |
 | `q`, `Esc`    | Quit application             |
 | `h`, `F1`     | Toggle help screen           |
+| `r`           | Enter interactive review mode |
 | `↑`, `k`      | Scroll diff log up           |
 | `↓`, `j`      | Scroll diff log down         |
 | `PgUp`        | Scroll diff log up (fast)    |
@@ -177,6 +189,58 @@ WatchDiff features a modern, responsive terminal user interface built with ratat
 | `End`         | Go to bottom of diff log     |
 | `←`, `→`      | Scroll file list             |
 | `/`, `Ctrl+P` | Enter fuzzy file search mode |
+
+**Interactive Review Mode:**
+| Key           | Action                       |
+| ------------- | ---------------------------- |
+| `a`           | Accept current hunk          |
+| `d`           | Reject current hunk          |
+| `s`           | Skip current hunk            |
+| `A`           | Accept all hunks in change   |
+| `D`           | Reject all hunks in change   |
+| `n`, `p`      | Next/Previous change         |
+| `j`, `k`      | Next/Previous hunk           |
+| `R`           | Jump to next risky change    |
+| `u`           | Jump to first unreviewed     |
+| `f`           | Toggle filters               |
+| `1-5`         | Apply filter presets         |
+| `S`           | Save review session          |
+| `L`           | Load review session          |
+| `q`           | Exit review mode             |
+
+#### AI Collaboration Workflow
+
+WatchDiff transforms how you work with AI coding assistants:
+
+**1. Automatic AI Detection**
+- Monitors running AI tools (Claude Code, Gemini CLI, Cursor, Copilot, etc.)
+- Automatically labels changes by origin (👤 Human, 🤖 AI, 🔧 Tool)
+- Groups related AI changes with batch IDs
+
+**2. Intelligent Risk Assessment**
+- Pattern detection for common AI mistakes (unsafe code, unwrap usage, debug prints)
+- Confidence scoring based on change complexity and file type
+- Visual indicators: 🟢 Safe, 🟡 Review, 🔴 Risky
+
+**3. Interactive Review Process**
+- Press `r` to enter review mode
+- Review changes hunk-by-hunk like `git add -p`
+- Accept (`a`), reject (`d`), or skip (`s`) individual hunks
+- Bulk operations for entire changes (`A`, `D`)
+
+**4. Advanced Filtering & Navigation**
+- Filter presets with single keystrokes:
+  - `1` - Show only risky changes
+  - `2` - Show only AI-generated changes  
+  - `3` - Show only pending reviews
+  - `4` - Show low confidence changes
+  - `5` - Show large changes (>5 hunks)
+- Jump to next risky change (`R`) or first unreviewed (`u`)
+
+**5. Session Management**
+- Save review progress (`S`) to resume later
+- Session persistence across restarts
+- Track completion percentage and review statistics
 
 #### Fuzzy File Search
 
@@ -317,6 +381,19 @@ When using `--export-dir`, WatchDiff automatically saves patches in multiple for
 
 ## Examples
 
+### AI Collaboration Workflow
+
+```bash
+# Monitor AI coding session with interactive review
+watchdiff-tui  # Press 'r' to enter review mode when AI makes changes
+
+# Watch specific project with AI change filtering
+watchdiff-tui --extensions rs,py,js  # Then use filter presets 1-5
+
+# Export AI-reviewed changes for team review
+watchdiff-tui --export-dir ./ai-review-patches
+```
+
 ### Development Workflow
 
 ```bash
@@ -387,15 +464,19 @@ WatchDiff is built with modern Rust practices and clean architecture:
 ```
 src/
 ├── core/           # Core file watching and event handling
-│   ├── events.rs   # Event definitions and processing
+│   ├── events.rs   # Event definitions with AI features
 │   ├── filter.rs   # File filtering with .gitignore support
 │   └── watcher.rs  # File system monitoring
+├── ai/             # AI collaboration features
+│   └── mod.rs      # AI detection, confidence scoring, batch processing
+├── review/         # Interactive review system
+│   └── mod.rs      # Session management, filtering, hunk-level review
 ├── diff/           # Modular diff generation system
 │   ├── algorithms.rs  # Trait-based algorithm implementations
 │   ├── generator.rs   # High-level diff generation
 │   └── formatter.rs   # Multiple output formats
 ├── export/         # Professional patch export capabilities
-├── ui/             # Terminal user interface with fuzzy search
+├── ui/             # Terminal user interface with review mode
 ├── performance/    # Performance optimization layer
 │   └── mod.rs      # LRU caching, debouncing, incremental search
 └── highlight.rs    # Syntax highlighting integration
@@ -409,6 +490,8 @@ src/
 - **CLI**: `clap` for robust argument parsing with derive macros
 - **Diffing**: `similar` crate with multiple algorithm implementations
 - **Filtering**: `ignore` crate for comprehensive `.gitignore` support
+- **AI & Review**: `serde` for session persistence, `regex` for advanced filtering
+- **Process Monitoring**: System process detection for AI tool identification
 - **Async**: `tokio` for non-blocking operations
 - **Date/Time**: `chrono` for export timestamps and metadata
 - **Performance**: `lru` crate for intelligent caching systems

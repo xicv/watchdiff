@@ -6,6 +6,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use anyhow::{Result, Context};
 use super::{FileEvent, FileEventKind, filter::FileFilter};
 use super::events::AppEvent;
+use crate::ai::{AIDetector, ConfidenceScorer};
 
 pub struct FileWatcher {
     _watcher: RecommendedWatcher,
@@ -35,6 +36,8 @@ impl FileWatcher {
         thread::spawn(move || {
             let mut previous_contents = std::collections::HashMap::<PathBuf, String>::new();
             let mut last_event_time = std::collections::HashMap::<PathBuf, std::time::Instant>::new();
+            let mut ai_detector = AIDetector::new();
+            let confidence_scorer = ConfidenceScorer::new();
 
             while let Ok(result) = rx.recv() {
                 match result {
@@ -108,7 +111,22 @@ impl FileWatcher {
                                 _ => None,
                             };
 
-                            if let Some(fe) = file_event {
+                            if let Some(mut fe) = file_event {
+                                // Detect change origin using AI detector
+                                let origin = ai_detector.detect_change_origin();
+                                fe = fe.with_origin(origin.clone());
+
+                                // Detect batch changes
+                                if let Some(batch_id) = ai_detector.detect_batch_change(&path, &origin) {
+                                    fe = fe.with_batch_id(batch_id);
+                                }
+
+                                // Score confidence if we have diff content
+                                if let Some(ref diff) = fe.diff {
+                                    let confidence = confidence_scorer.score_change(diff, &path);
+                                    fe = fe.with_confidence(confidence);
+                                }
+
                                 if event_tx.send(AppEvent::FileChanged(fe)).is_err() {
                                     break; // Receiver dropped, exit thread
                                 }
