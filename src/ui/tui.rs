@@ -35,6 +35,7 @@ pub enum AppMode {
     Search,
     Help,
     Review,
+    Summary,
 }
 
 /// Search mode state for fuzzy file search
@@ -44,14 +45,123 @@ pub struct SearchState {
     pub filtered_files: Vec<PathBuf>,
     pub selected_index: usize,
     pub preview_scroll: usize,
+    /// Debouncing for search performance
+    pub last_update: Option<std::time::Instant>,
+    pub pending_query: Option<String>,
+}
+
+/// Summary mode state for change summary view
+#[derive(Debug, Clone)]
+pub struct SummaryState {
+    pub selected_file_index: usize,
+    pub time_filter: crate::core::SummaryTimeFrame,
+    pub origin_filter: Option<crate::core::ChangeOrigin>,
+    pub view_mode: SummaryViewMode,
+    pub diff_scroll: usize,
+    pub last_refresh: std::time::Instant,
+    pub current_summary: Option<crate::core::ChangeSummary>,
+}
+
+/// Different view modes within the summary
+#[derive(Debug, Clone, PartialEq)]
+pub enum SummaryViewMode {
+    Overview,  // Show statistics and file list
+    FileDetail, // Show selected file's diff
+}
+
+impl Default for SummaryState {
+    fn default() -> Self {
+        Self {
+            selected_file_index: 0,
+            time_filter: crate::core::SummaryTimeFrame::LastDay,
+            origin_filter: None,
+            view_mode: SummaryViewMode::Overview,
+            diff_scroll: 0,
+            last_refresh: std::time::Instant::now(),
+            current_summary: None,
+        }
+    }
+}
+
+impl SummaryState {
+    pub fn move_up(&mut self) {
+        if self.selected_file_index > 0 {
+            self.selected_file_index -= 1;
+        }
+    }
+    
+    pub fn move_down(&mut self, max_items: usize) {
+        if self.selected_file_index + 1 < max_items {
+            self.selected_file_index += 1;
+        }
+    }
+    
+    pub fn toggle_view_mode(&mut self) {
+        self.view_mode = match self.view_mode {
+            SummaryViewMode::Overview => SummaryViewMode::FileDetail,
+            SummaryViewMode::FileDetail => SummaryViewMode::Overview,
+        };
+    }
+    
+    pub fn cycle_time_filter(&mut self) {
+        self.time_filter = match self.time_filter {
+            crate::core::SummaryTimeFrame::LastHour => crate::core::SummaryTimeFrame::LastDay,
+            crate::core::SummaryTimeFrame::LastDay => crate::core::SummaryTimeFrame::LastWeek,
+            crate::core::SummaryTimeFrame::LastWeek => crate::core::SummaryTimeFrame::All,
+            crate::core::SummaryTimeFrame::All => crate::core::SummaryTimeFrame::LastHour,
+            crate::core::SummaryTimeFrame::Custom(_) => crate::core::SummaryTimeFrame::LastHour,
+        };
+        self.last_refresh = std::time::Instant::now(); // Trigger refresh
+    }
+    
+    pub fn get_selected_file(&self) -> Option<&crate::core::FileSummaryEntry> {
+        self.current_summary.as_ref()?.files.get(self.selected_file_index)
+    }
+    
+    pub fn scroll_diff_up(&mut self) {
+        if self.diff_scroll > 0 {
+            self.diff_scroll -= 1;
+        }
+    }
+    
+    pub fn scroll_diff_down(&mut self) {
+        self.diff_scroll += 1;
+    }
 }
 
 impl SearchState {
+    /// Update search query with debouncing
+    pub fn update_query_debounced(&mut self, new_query: String) {
+        self.pending_query = Some(new_query);
+        self.last_update = Some(std::time::Instant::now());
+    }
+    
+    /// Check if enough time has passed to process pending query
+    pub fn should_update_search(&self) -> bool {
+        if let (Some(last_time), Some(_)) = (self.last_update, &self.pending_query) {
+            std::time::Instant::now().duration_since(last_time) > std::time::Duration::from_millis(300)
+        } else {
+            false
+        }
+    }
+    
+    /// Apply pending query update if debounce time has passed
+    pub fn apply_pending_update(&mut self) -> bool {
+        if self.should_update_search() {
+            if let Some(pending) = self.pending_query.take() {
+                self.query = pending;
+                self.selected_index = 0; // Reset selection when query changes
+                return true;
+            }
+        }
+        false
+    }
+    
     /// Optimized search with caching - called from TuiApp
     pub fn update_filtered_files_optimized(
         &mut self,
         all_files: &std::collections::HashSet<PathBuf>,
-        events: &[crate::core::HighlightedFileEvent],
+        events: &[&crate::core::HighlightedFileEvent],
         search_cache: &mut crate::performance::SearchResultCache,
     ) {
         // Calculate hash of all files to detect file set changes
@@ -111,7 +221,7 @@ impl SearchState {
     }
 
     /// Legacy method for backward compatibility
-    pub fn update_filtered_files(&mut self, all_files: &std::collections::HashSet<PathBuf>, events: &[crate::core::HighlightedFileEvent]) {
+    pub fn update_filtered_files(&mut self, all_files: &std::collections::HashSet<PathBuf>, events: &[&crate::core::HighlightedFileEvent]) {
         if self.query.is_empty() {
             // Show all files when no query
             self.filtered_files = all_files.iter().cloned().collect();
@@ -226,7 +336,7 @@ impl SearchState {
     }
 
     /// Sort search results by score and recent activity
-    fn sort_search_results(&self, scored_files: &mut Vec<(PathBuf, i32)>, events: &[crate::core::HighlightedFileEvent]) {
+    fn sort_search_results(&self, scored_files: &mut Vec<(PathBuf, i32)>, events: &[&crate::core::HighlightedFileEvent]) {
         scored_files.sort_by(|a, b| {
             let score_cmp = b.1.cmp(&a.1);
             if score_cmp == std::cmp::Ordering::Equal {
@@ -253,11 +363,15 @@ impl SearchState {
     }
     
     pub fn add_char(&mut self, c: char) {
-        self.query.push(c);
+        let mut new_query = self.pending_query.clone().unwrap_or_else(|| self.query.clone());
+        new_query.push(c);
+        self.update_query_debounced(new_query);
     }
     
     pub fn remove_char(&mut self) {
-        self.query.pop();
+        let mut new_query = self.pending_query.clone().unwrap_or_else(|| self.query.clone());
+        new_query.pop();
+        self.update_query_debounced(new_query);
     }
     
     pub fn clear(&mut self) {
@@ -336,6 +450,7 @@ pub struct TuiApp {
     pub vim_key_sequence: VimKeySequence,
     pub app_mode: AppMode,
     pub search_state: SearchState,
+    pub summary_state: SummaryState,
     pub review_session: Option<ReviewSession>,
     pub performance_cache: crate::performance::PerformanceCache,
     pub syntax_highlighter: crate::highlight::SyntaxHighlighter,
@@ -361,6 +476,7 @@ impl TuiApp {
             vim_key_sequence: VimKeySequence::default(),
             app_mode: AppMode::Normal,
             search_state: SearchState::default(),
+            summary_state: SummaryState::default(),
             review_session: None,
             performance_cache: crate::performance::PerformanceCache::new(),
             syntax_highlighter: crate::highlight::SyntaxHighlighter::new(),
@@ -411,6 +527,13 @@ impl TuiApp {
                                 continue; // Key was handled by review mode
                             }
                         }
+                        
+                        // Handle summary mode keys
+                        if self.app_mode == AppMode::Summary {
+                            if self.handle_summary_keys(&key) {
+                                continue; // Key was handled by summary mode
+                            }
+                        }
 
                         // Handle vim mode toggle and key sequences
                         if self.handle_vim_keys(&key) {
@@ -431,6 +554,10 @@ impl TuiApp {
                                     }
                                     AppMode::Review => {
                                         // Exit review mode
+                                        self.app_mode = AppMode::Normal;
+                                    }
+                                    AppMode::Summary => {
+                                        // Exit summary mode
                                         self.app_mode = AppMode::Normal;
                                     }
                                     AppMode::Normal => {
@@ -464,6 +591,11 @@ impl TuiApp {
                             KeyCode::Char('r') => {
                                 // Enter review mode
                                 self.enter_review_mode();
+                            },
+                            KeyCode::Char('s') => {
+                                // Enter summary mode
+                                self.app_mode = AppMode::Summary;
+                                self.summary_state = SummaryState::default();
                             },
                             KeyCode::Up | KeyCode::Char('k') => {
                                 if self.diff_scroll > 0 {
@@ -528,6 +660,10 @@ impl TuiApp {
                 self.render_review_mode(f);
                 return;
             }
+            AppMode::Summary => {
+                self.render_summary_mode(f);
+                return;
+            }
             AppMode::Normal => {
                 // Continue with normal rendering
             }
@@ -570,7 +706,7 @@ impl TuiApp {
             
             // Only slice if we have a valid range
             if start_idx < events.len() && start_idx <= end_idx {
-                for event in &events[start_idx..end_idx] {
+                for event in events.iter().skip(start_idx).take(end_idx - start_idx) {
                     lines.extend(self.format_highlighted_file_event(event));
                     lines.push(Line::from(""));
                 }
@@ -854,7 +990,11 @@ impl TuiApp {
             Span::styled(" h ", Style::default().fg(Color::White).bg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::styled(" for help, ", Style::default().fg(Color::Rgb(150, 150, 150))),
             Span::styled(" / ", Style::default().fg(Color::White).bg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(" to search | ", Style::default().fg(Color::Rgb(150, 150, 150))),
+            Span::styled(" to search, ", Style::default().fg(Color::Rgb(150, 150, 150))),
+            Span::styled(" s ", Style::default().fg(Color::White).bg(Color::Magenta).add_modifier(Modifier::BOLD)),
+            Span::styled(" for summary, ", Style::default().fg(Color::Rgb(150, 150, 150))),
+            Span::styled(" r ", Style::default().fg(Color::White).bg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::styled(" for review | ", Style::default().fg(Color::Rgb(150, 150, 150))),
         ];
         first_line.extend(vim_indicator);
         
@@ -937,9 +1077,14 @@ impl TuiApp {
     }
 
     fn render_search_input(&self, f: &mut Frame, area: Rect) {
+        // Show pending query for immediate visual feedback, fall back to committed query
+        let display_query = self.search_state.pending_query
+            .as_ref()
+            .unwrap_or(&self.search_state.query);
+        
         // Create input text with visual cursor indicator
         let prefix = "🔍 ";
-        let input_text = format!("{}{}█", prefix, self.search_state.query);
+        let input_text = format!("{}{}█", prefix, display_query);
         
         let input = Paragraph::new(input_text)
             .block(
@@ -953,7 +1098,7 @@ impl TuiApp {
         
         // Position the terminal cursor at the end (after the visual cursor)
         // This helps with terminal cursor visibility
-        let cursor_x = area.x + 1 + prefix.chars().count() as u16 + self.search_state.query.len() as u16 + 1;
+        let cursor_x = area.x + 1 + prefix.chars().count() as u16 + display_query.len() as u16 + 1;
         let cursor_y = area.y + 1;
         
         // Ensure cursor is within bounds
@@ -963,12 +1108,19 @@ impl TuiApp {
     }
 
     fn render_search_results(&mut self, f: &mut Frame, area: Rect) {
-        // Update filtered files based on current query using performance cache
-        self.search_state.update_filtered_files_optimized(
-            &self.state.watched_files,
-            &self.state.highlighted_events,
-            &mut self.performance_cache.search_results,
-        );
+        // Apply pending query updates if debounce time has passed
+        let should_refresh = self.search_state.apply_pending_update();
+        
+        // Only update filtered files if query changed or this is first time
+        if should_refresh || self.search_state.filtered_files.is_empty() {
+            // Convert VecDeque to slice for compatibility
+            let events_slice: Vec<_> = self.state.highlighted_events.iter().collect();
+            self.search_state.update_filtered_files_optimized(
+                &self.state.watched_files,
+                &events_slice,
+                &mut self.performance_cache.search_results,
+            );
+        }
         
         let items: Vec<ListItem> = self.search_state.filtered_files
             .iter()
@@ -1200,7 +1352,7 @@ impl TuiApp {
     }
 
     fn render_help(&self, f: &mut Frame) {
-        let popup_area = self.centered_rect(80, 60, f.area());
+        let popup_area = self.centered_rect(80, 75, f.area());
 
         let help_text = vec![
             Line::from(vec![
@@ -1285,6 +1437,70 @@ impl TuiApp {
             ]),
             Line::from(""),
             Line::from(vec![
+                Span::styled("Summary Mode", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled(" (Press s):", Style::default())
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  s          ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Enter summary mode", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  ↑/↓, j/k   ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Navigate files (overview) / scroll diff (detail)", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  Enter      ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- View selected file's diff", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  Esc        ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Back to overview / exit summary", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  t          ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Cycle time filter (Hour/Day/Week/All)", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  o          ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Cycle origin filter (Human/AI/Tool/All)", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  r          ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled("- Force refresh summary", Style::default())
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Review Mode", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled(" (Press r):", Style::default())
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  r          ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled("- Enter review mode", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  a/d        ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled("- Accept/reject current change", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  s          ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled("- Skip current change", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  n/p        ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled("- Next/previous change", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  j/k        ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled("- Next/previous hunk", Style::default())
+            ]),
+            Line::from(vec![
+                Span::styled("  1-5        ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                Span::styled("- Apply filter presets", Style::default())
+            ]),
+            Line::from(""),
+            Line::from(vec![
                 Span::styled("Vim Mode", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled(" (Press Esc to toggle):", Style::default())
             ]),
@@ -1327,6 +1543,8 @@ impl TuiApp {
             Line::from("• Real-time file change monitoring"),
             Line::from("• Respects .gitignore patterns"),
             Line::from("• Shows diffs for text file changes"),
+            Line::from("• Change summary with statistics and filtering"),
+            Line::from("• AI origin detection and confidence scoring"),
             Line::from("• Scrollable diff log and file list"),
             Line::from("• High performance with async processing"),
         ];
@@ -2179,6 +2397,452 @@ impl TuiApp {
             .wrap(Wrap { trim: true });
         
         f.render_widget(controls, area);
+    }
+
+    fn render_summary_mode(&mut self, f: &mut Frame) {
+        // Refresh summary if needed
+        self.refresh_summary_if_needed();
+
+        match self.summary_state.view_mode {
+            SummaryViewMode::Overview => {
+                self.render_summary_overview(f);
+            }
+            SummaryViewMode::FileDetail => {
+                self.render_summary_file_detail(f, f.area());
+            }
+        }
+    }
+
+    fn refresh_summary_if_needed(&mut self) {
+        // Refresh every 5 seconds or when time filter changes
+        let should_refresh = self.summary_state.current_summary.is_none() ||
+            std::time::Instant::now().duration_since(self.summary_state.last_refresh) > std::time::Duration::from_secs(5);
+
+        if should_refresh {
+            let mut filters = crate::core::SummaryFilters::default();
+            filters.time_frame = self.summary_state.time_filter;
+            
+            if let Some(ref origin) = self.summary_state.origin_filter {
+                filters.include_origins = vec![origin.clone()];
+            }
+
+            self.summary_state.current_summary = Some(self.state.generate_summary(&filters));
+            self.summary_state.last_refresh = std::time::Instant::now();
+        }
+    }
+
+    fn render_summary_overview(&mut self, f: &mut Frame) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Length(6),      // Summary stats
+                Constraint::Min(10),        // File list
+                Constraint::Length(3),      // Controls help
+            ])
+            .split(f.area());
+
+        self.render_summary_stats(f, chunks[0]);
+        self.render_summary_file_list(f, chunks[1]);
+        self.render_summary_controls(f, chunks[2]);
+    }
+
+    fn render_summary_stats(&self, f: &mut Frame, area: Rect) {
+        let summary = match &self.summary_state.current_summary {
+            Some(s) => s,
+            None => {
+                let loading = Paragraph::new("Loading summary...")
+                    .block(Block::default().borders(Borders::ALL).title(" Summary "));
+                f.render_widget(loading, area);
+                return;
+            }
+        };
+
+        let stats = &summary.stats;
+        let timeframe_text = match self.summary_state.time_filter {
+            crate::core::SummaryTimeFrame::LastHour => "Last Hour",
+            crate::core::SummaryTimeFrame::LastDay => "Last Day",
+            crate::core::SummaryTimeFrame::LastWeek => "Last Week",
+            crate::core::SummaryTimeFrame::All => "All Time",
+            crate::core::SummaryTimeFrame::Custom(_) => "Custom",
+        };
+
+        let stats_text = vec![
+            Line::from(vec![
+                Span::styled("📊 Change Summary", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({})", timeframe_text), Style::default().fg(Color::Gray)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Total Files: ", Style::default().fg(Color::White)),
+                Span::styled(format!("{}", stats.total_files), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("  Changes: ", Style::default().fg(Color::White)),
+                Span::styled(format!("{}", stats.total_changes), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("🟢 Created: ", Style::default().fg(Color::Green)),
+                Span::styled(format!("{}", stats.files_created), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled("  🟡 Modified: ", Style::default().fg(Color::Yellow)),
+                Span::styled(format!("{}", stats.files_modified), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("  🔴 Deleted: ", Style::default().fg(Color::Red)),
+                Span::styled(format!("{}", stats.files_deleted), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            ]),
+        ];
+
+        let stats_widget = Paragraph::new(stats_text)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(" Summary Statistics "));
+
+        f.render_widget(stats_widget, area);
+    }
+
+    fn render_summary_file_list(&mut self, f: &mut Frame, area: Rect) {
+        let summary = match &self.summary_state.current_summary {
+            Some(s) => s,
+            None => return,
+        };
+
+        let files: Vec<ListItem> = summary.files
+            .iter()
+            .enumerate()
+            .map(|(i, file)| {
+                let (event_symbol, color) = match &file.change_type {
+                    crate::core::FileEventKind::Created => ("●", Color::Green),
+                    crate::core::FileEventKind::Modified => ("●", Color::Yellow),
+                    crate::core::FileEventKind::Deleted => ("●", Color::Red),
+                    crate::core::FileEventKind::Moved { .. } => ("●", Color::Blue),
+                };
+
+                let origin_symbol = match &file.changed_by {
+                    crate::core::ChangeOrigin::Human => "👤",
+                    crate::core::ChangeOrigin::AIAgent { .. } => "🤖",
+                    crate::core::ChangeOrigin::Tool { .. } => "🔧",
+                    crate::core::ChangeOrigin::Unknown => "❓",
+                };
+
+                let _confidence_color = match &file.confidence_level {
+                    Some(crate::core::ConfidenceLevel::Safe) => Color::Green,
+                    Some(crate::core::ConfidenceLevel::Review) => Color::Yellow,
+                    Some(crate::core::ConfidenceLevel::Risky) => Color::Red,
+                    None => Color::Gray,
+                };
+
+                let time_ago = if let Ok(duration) = std::time::SystemTime::now().duration_since(file.changed_at) {
+                    if duration.as_secs() < 60 {
+                        format!("{}s ago", duration.as_secs())
+                    } else if duration.as_secs() < 3600 {
+                        format!("{}m ago", duration.as_secs() / 60)
+                    } else if duration.as_secs() < 86400 {
+                        format!("{}h ago", duration.as_secs() / 3600)
+                    } else {
+                        format!("{}d ago", duration.as_secs() / 86400)
+                    }
+                } else {
+                    "now".to_string()
+                };
+
+                let style = if i == self.summary_state.selected_file_index {
+                    Style::default().bg(Color::DarkGray).fg(Color::White)
+                } else {
+                    Style::default()
+                };
+
+                let path_display = file.path.to_string_lossy();
+                let truncated_path = if path_display.len() > 50 {
+                    format!("...{}", &path_display[path_display.len() - 47..])
+                } else {
+                    path_display.to_string()
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(format!("{} ", event_symbol), Style::default().fg(color)),
+                    Span::styled(format!("{} ", origin_symbol), Style::default()),
+                    Span::styled(truncated_path, style.fg(Color::White)),
+                    Span::styled(format!(" [{}]", time_ago), style.fg(Color::Gray)),
+                    if file.change_count > 1 {
+                        Span::styled(format!(" ({}×)", file.change_count), style.fg(Color::Cyan))
+                    } else {
+                        Span::raw("")
+                    },
+                ])).style(style)
+            })
+            .collect();
+
+        let file_list = List::new(files)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title(" Files "))
+            .highlight_style(Style::default().add_modifier(Modifier::BOLD));
+
+        f.render_widget(file_list, area);
+    }
+
+    fn render_summary_file_detail(&mut self, f: &mut Frame, area: Rect) {
+        // Clone the selected file to avoid borrow checker issues
+        let selected_file = match self.summary_state.get_selected_file() {
+            Some(file) => file.clone(),
+            None => {
+                let no_file = Paragraph::new("No file selected")
+                    .block(Block::default().borders(Borders::ALL).title(" File Detail "));
+                f.render_widget(no_file, area);
+                return;
+            }
+        };
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints([
+                Constraint::Length(4),      // File info
+                Constraint::Min(10),        // Diff view
+                Constraint::Length(2),      // Controls
+            ])
+            .split(area);
+
+        self.render_file_info(f, chunks[0], &selected_file);
+        self.render_file_diff(f, chunks[1], &selected_file);
+        self.render_file_detail_controls(f, chunks[2]);
+    }
+
+    fn render_file_info(&self, f: &mut Frame, area: Rect, file: &crate::core::FileSummaryEntry) {
+        let (event_symbol, event_type, color) = match &file.change_type {
+            crate::core::FileEventKind::Created => ("●", "CREATED", Color::Green),
+            crate::core::FileEventKind::Modified => ("●", "MODIFIED", Color::Yellow),
+            crate::core::FileEventKind::Deleted => ("●", "DELETED", Color::Red),
+            crate::core::FileEventKind::Moved { .. } => ("●", "MOVED", Color::Blue),
+        };
+
+        let origin_text = match &file.changed_by {
+            crate::core::ChangeOrigin::Human => "👤 Human",
+            crate::core::ChangeOrigin::AIAgent { tool_name, .. } => &format!("🤖 {}", tool_name),
+            crate::core::ChangeOrigin::Tool { name } => &format!("🔧 {}", name),
+            crate::core::ChangeOrigin::Unknown => "❓ Unknown",
+        };
+
+        let time_display = match file.changed_at.duration_since(std::time::UNIX_EPOCH) {
+            Ok(duration) => {
+                let datetime = std::time::SystemTime::UNIX_EPOCH + duration;
+                // Simple timestamp formatting
+                format!("{:?}", datetime)
+            }
+            Err(_) => "Unknown time".to_string(),
+        };
+
+        let info_text = vec![
+            Line::from(vec![
+                Span::styled(format!("{} {} ", event_symbol, event_type), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+                Span::styled(file.path.to_string_lossy(), Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("Changed by: ", Style::default().fg(Color::Gray)),
+                Span::styled(origin_text, Style::default().fg(Color::Cyan)),
+                Span::styled(format!("  At: {}", time_display), Style::default().fg(Color::Gray)),
+            ]),
+        ];
+
+        let info_widget = Paragraph::new(info_text)
+            .block(Block::default().borders(Borders::ALL).title(" File Information "));
+
+        f.render_widget(info_widget, area);
+    }
+
+    fn render_file_diff(&mut self, f: &mut Frame, area: Rect, file: &crate::core::FileSummaryEntry) {
+        let diff_text = if file.has_diff {
+            // Try to find the actual event to get the diff
+            let event = self.state.events.iter()
+                .find(|e| e.path == file.path)
+                .and_then(|e| e.diff.as_ref());
+
+            match event {
+                Some(diff) => {
+                    let lines: Vec<&str> = diff.lines().collect();
+                    let start_line = self.summary_state.diff_scroll;
+                    let end_line = (start_line + area.height as usize - 2).min(lines.len());
+                    
+                    lines[start_line..end_line].join("\n")
+                }
+                None => {
+                    if let Some(ref preview) = file.preview {
+                        format!("Preview:\n{}", preview)
+                    } else {
+                        "No diff available".to_string()
+                    }
+                }
+            }
+        } else {
+            match &file.change_type {
+                crate::core::FileEventKind::Created => "File was created",
+                crate::core::FileEventKind::Deleted => "File was deleted",
+                _ => "No diff available",
+            }.to_string()
+        };
+
+        let diff_widget = Paragraph::new(diff_text)
+            .block(Block::default().borders(Borders::ALL).title(" Diff "))
+            .wrap(Wrap { trim: true });
+
+        f.render_widget(diff_widget, area);
+    }
+
+    fn render_summary_controls(&self, f: &mut Frame, area: Rect) {
+        let controls_text = "Controls: j/k=Navigate | Enter=View Detail | t=Time Filter | o=Origin Filter | q=Exit";
+        
+        let controls = Paragraph::new(controls_text)
+            .block(Block::default().borders(Borders::ALL))
+            .alignment(Alignment::Center);
+
+        f.render_widget(controls, area);
+    }
+
+    fn render_file_detail_controls(&self, f: &mut Frame, area: Rect) {
+        let controls_text = "Controls: j/k=Scroll Diff | Esc=Back to Overview | q=Exit";
+        
+        let controls = Paragraph::new(controls_text)
+            .alignment(Alignment::Center);
+
+        f.render_widget(controls, area);
+    }
+
+    /// Handle keyboard input in summary mode
+    fn handle_summary_keys(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                match self.summary_state.view_mode {
+                    SummaryViewMode::Overview => {
+                        self.summary_state.move_up();
+                    }
+                    SummaryViewMode::FileDetail => {
+                        self.summary_state.scroll_diff_up();
+                    }
+                }
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                match self.summary_state.view_mode {
+                    SummaryViewMode::Overview => {
+                        let max_items = self.summary_state.current_summary
+                            .as_ref()
+                            .map(|s| s.files.len())
+                            .unwrap_or(0);
+                        self.summary_state.move_down(max_items);
+                    }
+                    SummaryViewMode::FileDetail => {
+                        self.summary_state.scroll_diff_down();
+                    }
+                }
+                true
+            }
+            KeyCode::Enter => {
+                if self.summary_state.view_mode == SummaryViewMode::Overview {
+                    self.summary_state.view_mode = SummaryViewMode::FileDetail;
+                    self.summary_state.diff_scroll = 0; // Reset scroll when entering detail view
+                }
+                true
+            }
+            KeyCode::Esc => {
+                if self.summary_state.view_mode == SummaryViewMode::FileDetail {
+                    self.summary_state.view_mode = SummaryViewMode::Overview;
+                } else {
+                    // Exit summary mode if already in overview
+                    self.app_mode = AppMode::Normal;
+                }
+                true
+            }
+            KeyCode::Char('t') => {
+                // Cycle through time filters
+                self.summary_state.cycle_time_filter();
+                true
+            }
+            KeyCode::Char('o') => {
+                // Cycle through origin filters
+                self.summary_state.origin_filter = match &self.summary_state.origin_filter {
+                    None => Some(crate::core::ChangeOrigin::Human),
+                    Some(crate::core::ChangeOrigin::Human) => Some(crate::core::ChangeOrigin::AIAgent {
+                        tool_name: "Any AI".to_string(),
+                        process_id: None,
+                    }),
+                    Some(crate::core::ChangeOrigin::AIAgent { .. }) => Some(crate::core::ChangeOrigin::Tool {
+                        name: "Any Tool".to_string(),
+                    }),
+                    Some(crate::core::ChangeOrigin::Tool { .. }) => Some(crate::core::ChangeOrigin::Unknown),
+                    Some(crate::core::ChangeOrigin::Unknown) => None,
+                };
+                self.summary_state.last_refresh = std::time::Instant::now(); // Trigger refresh
+                true
+            }
+            KeyCode::PageUp => {
+                match self.summary_state.view_mode {
+                    SummaryViewMode::Overview => {
+                        // Move up by 10 files
+                        for _ in 0..10 {
+                            self.summary_state.move_up();
+                        }
+                    }
+                    SummaryViewMode::FileDetail => {
+                        // Scroll diff up by 10 lines
+                        for _ in 0..10 {
+                            self.summary_state.scroll_diff_up();
+                        }
+                    }
+                }
+                true
+            }
+            KeyCode::PageDown => {
+                match self.summary_state.view_mode {
+                    SummaryViewMode::Overview => {
+                        // Move down by 10 files
+                        let max_items = self.summary_state.current_summary
+                            .as_ref()
+                            .map(|s| s.files.len())
+                            .unwrap_or(0);
+                        for _ in 0..10 {
+                            self.summary_state.move_down(max_items);
+                        }
+                    }
+                    SummaryViewMode::FileDetail => {
+                        // Scroll diff down by 10 lines
+                        for _ in 0..10 {
+                            self.summary_state.scroll_diff_down();
+                        }
+                    }
+                }
+                true
+            }
+            KeyCode::Home => {
+                match self.summary_state.view_mode {
+                    SummaryViewMode::Overview => {
+                        self.summary_state.selected_file_index = 0;
+                    }
+                    SummaryViewMode::FileDetail => {
+                        self.summary_state.diff_scroll = 0;
+                    }
+                }
+                true
+            }
+            KeyCode::End => {
+                match self.summary_state.view_mode {
+                    SummaryViewMode::Overview => {
+                        let max_items = self.summary_state.current_summary
+                            .as_ref()
+                            .map(|s| s.files.len().saturating_sub(1))
+                            .unwrap_or(0);
+                        self.summary_state.selected_file_index = max_items;
+                    }
+                    SummaryViewMode::FileDetail => {
+                        // Set to a high value, the render function will handle bounds
+                        self.summary_state.diff_scroll = 9999;
+                    }
+                }
+                true
+            }
+            KeyCode::Char('r') => {
+                // Force refresh summary
+                self.summary_state.last_refresh = std::time::Instant::now();
+                true
+            }
+            _ => false, // Key not handled by summary mode
+        }
     }
 }
 

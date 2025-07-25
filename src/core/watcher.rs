@@ -7,6 +7,7 @@ use anyhow::{Result, Context};
 use super::{FileEvent, FileEventKind, filter::FileFilter};
 use super::events::AppEvent;
 use crate::ai::{AIDetector, ConfidenceScorer};
+use crate::config::WatchDiffConfig;
 
 pub struct FileWatcher {
     _watcher: RecommendedWatcher,
@@ -16,6 +17,10 @@ pub struct FileWatcher {
 
 impl FileWatcher {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        Self::with_config(path, WatchDiffConfig::default())
+    }
+    
+    pub fn with_config<P: AsRef<Path>>(path: P, config: WatchDiffConfig) -> Result<Self> {
         let path = path.as_ref();
         let filter = FileFilter::new(path)?;
         
@@ -31,6 +36,7 @@ impl FileWatcher {
             .context("Failed to start watching directory")?;
 
         let filter_clone = FileFilter::new(path)?;
+        let config_clone = config.clone();
 
         // Spawn background thread to process notify events
         thread::spawn(move || {
@@ -38,6 +44,11 @@ impl FileWatcher {
             let mut last_event_time = std::collections::HashMap::<PathBuf, std::time::Instant>::new();
             let mut ai_detector = AIDetector::new();
             let confidence_scorer = ConfidenceScorer::new();
+            
+            // Diff cache: (old_hash, new_hash) -> diff_result
+            let mut diff_cache = std::collections::HashMap::<(u64, u64), String>::new();
+            let cache_size_limit = config_clone.cache.diff_cache_size;
+            let debounce_duration = config_clone.watcher.event_debounce_duration();
 
             while let Ok(result) = rx.recv() {
                 match result {
@@ -53,7 +64,7 @@ impl FileWatcher {
                             
                             // Debounce: ignore events that happen too quickly after the previous one
                             if let Some(last_time) = last_event_time.get(&path) {
-                                if now.duration_since(*last_time) < Duration::from_millis(100) {
+                                if now.duration_since(*last_time) < debounce_duration {
                                     continue;  // Skip this event as it's too soon
                                 }
                             }
@@ -88,7 +99,32 @@ impl FileWatcher {
                                                 if *old_content == new_content {
                                                     continue;
                                                 }
-                                                let diff = crate::diff::generate_unified_diff(old_content, &new_content, &path, &path);
+                                                
+                                                // Use hash-based diff caching
+                                                let old_hash = Self::hash_content(old_content);
+                                                let new_hash = Self::hash_content(&new_content);
+                                                let cache_key = (old_hash, new_hash);
+                                                
+                                                let diff = if let Some(cached_diff) = diff_cache.get(&cache_key) {
+                                                    // Use cached diff
+                                                    cached_diff.clone()
+                                                } else {
+                                                    // Generate new diff and cache it
+                                                    let new_diff = crate::diff::generate_unified_diff(old_content, &new_content, &path, &path);
+                                                    diff_cache.insert(cache_key, new_diff.clone());
+                                                    
+                                                    // Limit cache size to prevent memory growth
+                                                    if diff_cache.len() > cache_size_limit {
+                                                        // Clear cache when it exceeds limit
+                                                        let cleanup_threshold = (cache_size_limit as f32 * config_clone.cache.cleanup_threshold) as usize;
+                                                        if diff_cache.len() > cleanup_threshold {
+                                                            diff_cache.clear();
+                                                        }
+                                                    }
+                                                    
+                                                    new_diff
+                                                };
+                                                
                                                 fe = fe.with_diff(diff);
                                             } else {
                                                 // First time seeing this file - show a preview instead of empty diff
@@ -161,6 +197,16 @@ impl FileWatcher {
 
     pub fn get_initial_files(&self) -> Result<Vec<PathBuf>> {
         self.filter.get_watchable_files()
+    }
+    
+    /// Hash content for diff caching
+    fn hash_content(content: &str) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

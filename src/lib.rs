@@ -16,6 +16,7 @@
 
 pub mod ai;
 pub mod cli;
+pub mod config;
 pub mod core;
 pub mod diff;
 pub mod export;
@@ -27,7 +28,9 @@ pub mod ui;
 // Re-export commonly used types for backward compatibility
 pub use core::{AppState, FileEvent, FileEventKind, HighlightedFileEvent, FileWatcher, AppEvent};
 pub use core::{ChangeOrigin, ChangeConfidence, ConfidenceLevel};
+pub use core::{ChangeSummary, ChangeSummaryStats, FileSummaryEntry, SummaryFilters, SummaryTimeFrame, SummaryGrouping};
 pub use ai::{AIDetector, ConfidenceScorer};
+pub use config::{WatchDiffConfig, WatcherConfig, CacheConfig, UiConfig, AiConfig};
 pub use review::{ReviewSession, ReviewableChange, ReviewAction, ReviewFilters, ReviewNavigationAction, ReviewFilterPreset};
 pub use ui::{TuiApp, setup_terminal, restore_terminal};
 pub use diff::{DiffGenerator, DiffAlgorithmType, DiffFormatter, DiffFormat};

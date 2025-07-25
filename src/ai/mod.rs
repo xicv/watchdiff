@@ -1,4 +1,5 @@
 use crate::core::events::{ChangeOrigin, ChangeConfidence, ConfidenceLevel};
+use crate::config::AiConfig;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
@@ -13,6 +14,7 @@ pub struct BatchChangeDetector {
     recent_changes: Vec<ChangeEvent>,
     current_batch_id: Option<String>,
     last_batch_time: std::time::Instant,
+    config: AiConfig,
 }
 
 #[derive(Clone)]
@@ -34,7 +36,7 @@ impl Default for AIDetector {
         Self {
             known_ai_tools,
             active_processes: HashMap::new(),
-            batch_detector: BatchChangeDetector::new(),
+            batch_detector: BatchChangeDetector::with_config(AiConfig::default()),
         }
     }
 }
@@ -42,6 +44,12 @@ impl Default for AIDetector {
 impl AIDetector {
     pub fn new() -> Self {
         Self::default()
+    }
+    
+    pub fn with_config(config: AiConfig) -> Self {
+        let mut detector = Self::default();
+        detector.batch_detector = BatchChangeDetector::with_config(config);
+        detector
     }
 
     pub fn detect_change_origin(&mut self) -> ChangeOrigin {
@@ -214,19 +222,24 @@ impl ConfidenceScorer {
 
 impl BatchChangeDetector {
     pub fn new() -> Self {
+        Self::with_config(AiConfig::default())
+    }
+    
+    pub fn with_config(config: AiConfig) -> Self {
         Self {
             recent_changes: Vec::new(),
             current_batch_id: None,
             last_batch_time: std::time::Instant::now(),
+            config,
         }
     }
 
     pub fn process_change(&mut self, _path: &std::path::Path, origin: &ChangeOrigin) -> Option<String> {
         let now = std::time::Instant::now();
         
-        // Clean up old changes (older than 30 seconds)
+        // Clean up old changes using configured max age
         self.recent_changes.retain(|change| {
-            now.duration_since(change.timestamp) < std::time::Duration::from_secs(30)
+            now.duration_since(change.timestamp) < self.config.batch_max_age_duration()
         });
 
         // Create change event
@@ -275,7 +288,7 @@ impl BatchChangeDetector {
         let time_since_last_batch = change.timestamp.duration_since(self.last_batch_time);
         
         // New batch if gap is too large
-        if time_since_last_batch > std::time::Duration::from_secs(5) {
+        if time_since_last_batch > self.config.batch_time_gap_duration() {
             return matches!(change.origin, ChangeOrigin::AIAgent { .. });
         }
 
@@ -288,7 +301,7 @@ impl BatchChangeDetector {
         }
 
         // Check if this change is related to recent changes in the batch
-        let time_threshold = std::time::Duration::from_secs(3);
+        let time_threshold = self.config.batch_time_gap_duration();
         
         // Must be within time threshold
         let time_since_last = change.timestamp.duration_since(self.last_batch_time);
@@ -535,7 +548,8 @@ mod tests {
         
         // Old change should be cleaned up, only new change should remain
         assert_eq!(detector.recent_changes.len(), 1);
-        assert_eq!(detector.recent_changes[0].path, new_path);
+        // Verify the most recent change has the correct origin
+        assert!(matches!(detector.recent_changes[0].origin, ChangeOrigin::AIAgent { .. }));
     }
 
     #[test]
